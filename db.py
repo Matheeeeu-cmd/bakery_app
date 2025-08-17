@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple, Union, Set
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey,
-    Text, Date, UniqueConstraint, event, inspect
+    Text, Date, UniqueConstraint, event, inspect, Table
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
 
@@ -81,14 +81,20 @@ class Config(Base):
     fifo_stage = Column(String(64), default="EM_PRODUCAO")  # estágio que dispara o consumo FIFO
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
-class UserRole(Base):
-    __tablename__ = "user_role"
+# Associação simples usuário<->papel (tabela de junção, sem classe ORM)
+user_role_table = Table(
+    "user_role",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey("user.id", ondelete="CASCADE"), primary_key=True),
+    Column("role_id", Integer, ForeignKey("role.id", ondelete="CASCADE"), primary_key=True),
+)
+
+class Role(Base):
+    __tablename__ = "role"
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False)
-    role_id = Column(Integer, ForeignKey("role.id", ondelete="CASCADE"), nullable=False)
-    __table_args__ = (
-        UniqueConstraint("user_id", "role_id", name="uq_user_role_user_role"),
-    )
+    name = Column(String(50), unique=True, nullable=False)
+    permissions_json = Column(Text, default=lambda: json.dumps(sorted(list(ALL_PERMISSIONS))))
+    users = relationship("User", secondary=user_role_table, back_populates="roles")
 
 class User(Base):
     __tablename__ = "user"
@@ -99,14 +105,7 @@ class User(Base):
     password_hash = Column(String(200), nullable=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
-    roles = relationship("Role", secondary="user_role", back_populates="users")
-
-class UserRole(Base):
-    __tablename__ = "user_role"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("user.id", ondelete="CASCADE"))
-    role_id = Column(Integer, ForeignKey("role.id", ondelete="CASCADE"))
-    UniqueConstraint("user_id","role_id")
+    roles = relationship("Role", secondary=user_role_table, back_populates="users")
 
 class Supplier(Base):
     __tablename__ = "supplier"
@@ -114,7 +113,6 @@ class Supplier(Base):
     name = Column(String(120), unique=True, nullable=False)
     contact = Column(String(200))
     created_at = Column(DateTime, default=dt.datetime.utcnow)
-
 class Ingredient(Base):
     __tablename__ = "ingredient"
     id = Column(Integer, primary_key=True)
