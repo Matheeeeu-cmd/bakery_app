@@ -11,7 +11,7 @@ import streamlit as st
 
 from db import (
     make_engine, make_sessionmaker, init_db,
-    User, Role, UserRole, Config,
+    User, Role, Config,
     Ingredient, IngredientPrice, Supplier, StockLot, StockMove, LossEvent,
     Recipe, RecipeItem, Product, Client, Order, OrderItem,
     ManualPurchase, ManualPurchaseItem,
@@ -126,7 +126,7 @@ def create_first_admin():
                 if not admin_role:
                     toast_err("Papel 'admin' não encontrado. Reinicie o app.")
                     return
-                s.add(UserRole(user_id=u.id, role_id=admin_role.id))
+                u.roles.append(admin_role)
                 s.commit()
                 toast_ok("Administrador criado. Faça login na barra lateral.")
 
