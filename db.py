@@ -81,12 +81,14 @@ class Config(Base):
     fifo_stage = Column(String(64), default="EM_PRODUCAO")  # estágio que dispara o consumo FIFO
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
-class Role(Base):
-    __tablename__ = "role"
+class UserRole(Base):
+    __tablename__ = "user_role"
     id = Column(Integer, primary_key=True)
-    name = Column(String(50), unique=True, nullable=False)
-    permissions_json = Column(Text, default=lambda: json.dumps(sorted(list(ALL_PERMISSIONS))))
-    users = relationship("User", secondary="user_role", back_populates="roles")
+    user_id = Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False)
+    role_id = Column(Integer, ForeignKey("role.id", ondelete="CASCADE"), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("user_id", "role_id", name="uq_user_role_user_role"),
+    )
 
 class User(Base):
     __tablename__ = "user"
