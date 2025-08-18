@@ -1,6 +1,5 @@
 # db.py
 # ORM e utilitários de negócio/estoque/RBAC
-# Onde colar: salve este arquivo como "db.py" na raiz do projeto.
 
 from __future__ import annotations
 import json
@@ -10,44 +9,42 @@ from typing import Dict, List, Optional, Tuple, Union, Set
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey,
-    Text, Date, UniqueConstraint, event, inspect, Table, text  # <- text aqui
+    Text, Date, Table, text, inspect
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
 
-# base do ORM
+# ---------------------------------------------------------------------
+# Base / Constantes
+# ---------------------------------------------------------------------
 Base = declarative_base()
 
-# defaults do Kanban (caso ainda não estejam definidos abaixo)
-DEFAULT_KANBAN_STAGES = ["NOVO","PRA_PRODUCAO","EM_PRODUCAO","EMBALAGEM","PRONTO_RETIRADA","ENTREGUE","CANCELADO"]
+DEFAULT_KANBAN_STAGES = [
+    "NOVO","PRA_PRODUCAO","EM_PRODUCAO","EMBALAGEM","PRONTO_RETIRADA","ENTREGUE","CANCELADO"
+]
 
-# -----------------------
-# Base / Engine helpers
-# -----------------------
-Base = declarative_base()
-
-DEFAULT_KANBAN_STAGES = ["NOVO","PRA_PRODUCAO","EM_PRODUCAO","EMBALAGEM","PRONTO_RETIRADA","ENTREGUE","CANCELADO"]
-
+# ---------------------------------------------------------------------
+# Engine helpers
+# ---------------------------------------------------------------------
 def make_engine(database_url: Optional[str] = None):
     url = database_url or os.getenv("DATABASE_URL")
     if not url:
         url = "sqlite:///bakery.db"
-    # SQLite pragmas for FK
     engine = create_engine(url, echo=False, future=True)
     if url.startswith("sqlite"):
+        from sqlalchemy import event
         @event.listens_for(engine, "connect")
         def _set_sqlite_pragma(dbapi_connection, connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.close()
+            cur = dbapi_connection.cursor()
+            cur.execute("PRAGMA foreign_keys=ON")
+            cur.close()
     return engine
 
 def make_sessionmaker(engine):
     return sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
-# -----------------------
+# ---------------------------------------------------------------------
 # RBAC
-# -----------------------
-# Códigos de permissão (páginas e ações)
+# ---------------------------------------------------------------------
 ALL_PERMISSIONS: Set[str] = set([
     # páginas
     "page.dashboard","page.ingredients","page.recipes","page.products","page.clients",
@@ -74,9 +71,9 @@ ALL_PERMISSIONS: Set[str] = set([
     "rbac.manage_users","rbac.manage_roles","rbac.assign_roles",
 ])
 
-# -----------------------
-# MODELOS
-# -----------------------
+# ---------------------------------------------------------------------
+# Modelos
+# ---------------------------------------------------------------------
 class Config(Base):
     __tablename__ = "config"
     id = Column(Integer, primary_key=True)
@@ -87,7 +84,7 @@ class Config(Base):
     fifo_stage = Column(String(64), default="EM_PRODUCAO")  # estágio que dispara o consumo FIFO
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
-# Associação simples usuário<->papel (tabela de junção, sem classe ORM)
+# associação usuário <-> papel
 user_role_table = Table(
     "user_role",
     Base.metadata,
@@ -135,16 +132,13 @@ def delete_token(session: Session, token: str):
     session.query(LoginToken).filter(LoginToken.token == token).delete()
     session.commit()
 
-
 class Supplier(Base):
     __tablename__ = "supplier"
     id = Column(Integer, primary_key=True)
     name = Column(String(120), unique=True, nullable=False)
     contact = Column(String(200))
     created_at = Column(DateTime, default=dt.datetime.utcnow)
-
     manual_purchases = relationship("ManualPurchase", back_populates="supplier")
-# ---------- MODELOS CORRIGIDOS (Ingredient → ManualPurchase) ----------
 
 class Ingredient(Base):
     __tablename__ = "ingredient"
@@ -154,10 +148,8 @@ class Ingredient(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
-    # pares consistentes
     prices = relationship("IngredientPrice", back_populates="ingredient", cascade="all, delete-orphan")
     stock_lots = relationship("StockLot", back_populates="ingredient", cascade="all, delete-orphan")
-
 
 class IngredientPrice(Base):
     __tablename__ = "ingredient_price"
@@ -167,7 +159,6 @@ class IngredientPrice(Base):
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
     ingredient = relationship("Ingredient", back_populates="prices")
-
 
 class StockLot(Base):
     __tablename__ = "stock_lot"
@@ -184,17 +175,15 @@ class StockLot(Base):
     ingredient = relationship("Ingredient", back_populates="stock_lots")
     moves = relationship("StockMove", back_populates="lot", cascade="all, delete-orphan")
 
-# === ADICIONE ESTA CLASSE ANTES DE RecipeItem ===
 class Recipe(Base):
     __tablename__ = "recipe"
     id = Column(Integer, primary_key=True)
     name = Column(String(120), unique=True, nullable=False)
-    yield_qty = Column(Float, default=1.0)   # rendimento total da receita
-    unit = Column(String(20), default="un")  # unidade do rendimento (ex.: un, g)
+    yield_qty = Column(Float, default=1.0)           # rendimento total
+    unit = Column(String(20), default="un")          # unidade do rendimento
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
-    # Relacionamento correto com RecipeItem usando a FK recipe_id
     items = relationship(
         "RecipeItem",
         back_populates="recipe",
@@ -206,17 +195,14 @@ class RecipeItem(Base):
     __tablename__ = "recipe_item"
     id = Column(Integer, primary_key=True)
     recipe_id = Column(Integer, ForeignKey("recipe.id", ondelete="CASCADE"), nullable=False)
-    # item pode ser ingrediente OU sub-receita
     ingredient_id = Column(Integer, ForeignKey("ingredient.id", ondelete="SET NULL"))
     sub_recipe_id = Column(Integer, ForeignKey("recipe.id", ondelete="SET NULL"))
     qty = Column(Float, nullable=False)
     item_type = Column(String(20), default="peso")  # "peso" ou "unidade"
 
-    # vincula explicitamente a FK correta para evitar ambiguidade
     recipe = relationship("Recipe", back_populates="items", foreign_keys=[recipe_id])
     ingredient = relationship("Ingredient", foreign_keys=[ingredient_id])
     sub_recipe = relationship("Recipe", foreign_keys=[sub_recipe_id])
-
 
 class Product(Base):
     __tablename__ = "product"
@@ -224,14 +210,11 @@ class Product(Base):
     name = Column(String(120), unique=True, nullable=False)
     recipe_id = Column(Integer, ForeignKey("recipe.id", ondelete="SET NULL"))
     is_active = Column(Boolean, default=True)
-    price_manual = Column(Float)  # se preenchido, usar manual
+    price_manual = Column(Float)                     # se preenchido, usa manual
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
-    # opcionalmente parear com Recipe (se sua classe Recipe tiver products)
     recipe = relationship("Recipe")
-    # parear com OrderItem para evitar avisos futuros
     order_items = relationship("OrderItem", back_populates="product")
-
 
 class Client(Base):
     __tablename__ = "client"
@@ -245,7 +228,6 @@ class Client(Base):
 
     orders = relationship("Order", back_populates="client")
 
-
 class Order(Base):
     __tablename__ = "order"
     id = Column(Integer, primary_key=True)
@@ -255,14 +237,13 @@ class Order(Base):
     delivery_date = Column(Date)
     total = Column(Float, default=0.0)
     obs = Column(Text)
-    pos_stage = Column(String(32), default="ENTREGUE")  # pipeline pós-venda
+    pos_stage = Column(String(32), default="ENTREGUE")
     canceled_reason = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
     client = relationship("Client", back_populates="orders")
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     moves = relationship("StockMove", back_populates="order")
-
 
 class OrderItem(Base):
     __tablename__ = "order_item"
@@ -271,30 +252,28 @@ class OrderItem(Base):
     product_id = Column(Integer, ForeignKey("product.id", ondelete="SET NULL"))
     qty = Column(Float, nullable=False)
     unit_price = Column(Float, nullable=False)
-    unit_cost_snapshot = Column(Float, default=0.0)  # custo unitário estimado no momento do pedido
+    unit_cost_snapshot = Column(Float, default=0.0)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
     order = relationship("Order", back_populates="items")
     product = relationship("Product", back_populates="order_items")
-
 
 class StockMove(Base):
     __tablename__ = "stock_move"
     id = Column(Integer, primary_key=True)
     lot_id = Column(Integer, ForeignKey("stock_lot.id", ondelete="SET NULL"))
     ingredient_id = Column(Integer, ForeignKey("ingredient.id", ondelete="SET NULL"))
-    move_type = Column(String(12), default="OUT")  # IN, OUT, ADJUST, LOSS
+    move_type = Column(String(12), default="OUT")    # IN, OUT, ADJUST, LOSS
     qty = Column(Float, nullable=False)
     unit = Column(String(20), default="g")
-    cost = Column(Float, default=0.0)              # custo estimado (p/ OUT/LOSS)
+    cost = Column(Float, default=0.0)                # custo (para OUT/LOSS)
     order_id = Column(Integer, ForeignKey("order.id", ondelete="SET NULL"))
     notes = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
     lot = relationship("StockLot", back_populates="moves")
     order = relationship("Order", back_populates="moves")
-    ingredient = relationship("Ingredient")  # sem back_populates (consulta solta)
-
+    ingredient = relationship("Ingredient")
 
 class LossEvent(Base):
     __tablename__ = "loss_event"
@@ -308,24 +287,21 @@ class LossEvent(Base):
     ingredient = relationship("Ingredient")
     lot = relationship("StockLot")
 
-
 class ManualPurchase(Base):
     __tablename__ = "manual_purchase"
     id = Column(Integer, primary_key=True)
     supplier_id = Column(Integer, ForeignKey("supplier.id", ondelete="SET NULL"))
     total = Column(Float, default=0.0)
 
-    # usados na página "Sugestões de compra"
+    # usados por "Sugestões de compra"
     is_suggestion = Column(Boolean, default=False, nullable=False)
     title = Column(String(200))
     completed_at = Column(DateTime)
 
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
-    # pares de relacionamento
     supplier = relationship("Supplier", back_populates="manual_purchases")
     items = relationship("ManualPurchaseItem", back_populates="purchase", cascade="all, delete-orphan")
-
 
 class ManualPurchaseItem(Base):
     __tablename__ = "manual_purchase_item"
@@ -339,17 +315,17 @@ class ManualPurchaseItem(Base):
     purchase = relationship("ManualPurchase", back_populates="items")
     ingredient = relationship("Ingredient")
 
-# -----------------------
-# Funções RBAC
-# -----------------------
+# ---------------------------------------------------------------------
+# RBAC helpers
+# ---------------------------------------------------------------------
 def seed_default_roles(session: Session):
     """Cria papéis admin, staff e seller idempotentemente."""
     existing = {r.name: r for r in session.query(Role).all()}
-    # Admin com todas as permissões
+
     if "admin" not in existing:
         admin = Role(name="admin", permissions_json=json.dumps(sorted(list(ALL_PERMISSIONS))))
         session.add(admin)
-    # Staff: operação (pedidos, produção, estoque básico, clientes)
+
     staff_perms = {
         "page.dashboard","page.ingredients","page.recipes","page.products",
         "page.clients","page.orders.new","page.orders.kanban","page.postsale","page.calendar",
@@ -358,13 +334,14 @@ def seed_default_roles(session: Session):
         "recipe.create","recipe.update",
         "product.create","product.update",
         "client.create","client.update",
-        "order.create","order.update","order.mark_paid","order.unmark_paid","order.move_stage","order.consume_fifo","order.cancel",
+        "order.create","order.update","order.mark_paid","order.unmark_paid",
+        "order.move_stage","order.consume_fifo","order.cancel",
         "stock.discard","stock.discard_expired",
     }
     if "staff" not in existing:
         staff = Role(name="staff", permissions_json=json.dumps(sorted(list(staff_perms))))
         session.add(staff)
-    # Seller: foco em vendas/atendimento
+
     seller_perms = {
         "page.dashboard","page.products","page.clients","page.orders.new","page.orders.kanban","page.calendar",
         "client.create","client.update",
@@ -373,6 +350,7 @@ def seed_default_roles(session: Session):
     if "seller" not in existing:
         seller = Role(name="seller", permissions_json=json.dumps(sorted(list(seller_perms))))
         session.add(seller)
+
     session.commit()
 
 def _normalize_user_ref(session: Session, user_ref: Union[int, str, User]) -> Optional[User]:
@@ -396,21 +374,20 @@ def get_user_permissions(session: Session, user_ref: Union[int, str, User]) -> S
         except Exception:
             role_perms = set()
         perms |= role_perms
-    # Heurística: se usuário tiver papel 'admin', concede tudo
     if any(r.name == "admin" for r in user.roles):
         perms = set(ALL_PERMISSIONS)
     return perms
 
-# -----------------------
+# ---------------------------------------------------------------------
 # Config default
-# -----------------------
+# ---------------------------------------------------------------------
 def get_or_create_default_config(session: Session) -> Config:
     cfg = session.query(Config).first()
     if not cfg:
         cfg = Config()
         session.add(cfg)
         session.commit()
-    # fallback se json inválido
+    # fallback para JSON inválido ou vazio
     try:
         stages = json.loads(cfg.kanban_stages_json or "[]")
         assert isinstance(stages, list) and len(stages) > 0
@@ -422,13 +399,9 @@ def get_or_create_default_config(session: Session) -> Config:
         session.commit()
     return cfg
 
-# -----------------------
-# Migrations idempotentes simples
-# -----------------------
-from sqlalchemy import text
-# -----------------------
-# Migrations idempotentes simples
-# -----------------------
+# ---------------------------------------------------------------------
+# Migrações idempotentes
+# ---------------------------------------------------------------------
 def column_exists(engine, table_name: str, column_name: str) -> bool:
     insp = inspect(engine)
     try:
@@ -439,41 +412,27 @@ def column_exists(engine, table_name: str, column_name: str) -> bool:
 
 def run_safe_migrations(engine):
     """
-    Executa ALTER TABLE com IF NOT EXISTS para criar colunas faltantes.
-    É seguro rodar várias vezes.
+    Executa ALTER TABLE ... IF NOT EXISTS para criar colunas faltantes.
+    Pode rodar várias vezes sem erro.
     """
     with engine.begin() as conn:
         insp = inspect(engine)
         tables = set(insp.get_table_names())
 
-        # ------- ManualPurchase: colunas usadas por "Sugestões de compra" -------
+        # ManualPurchase -> colunas usadas por "Sugestões de compra"
         if "manual_purchase" in tables:
-            stmts = [
-                'ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS is_suggestion BOOLEAN DEFAULT 0',
-                'ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS title VARCHAR(200)',
-                'ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP',
-            ]
-            for stmt in stmts:
-                try:
-                    conn.execute(text(stmt))
-                except Exception:
-                    pass  # idempotente
+            conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS is_suggestion BOOLEAN DEFAULT 0'))
+            conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS title VARCHAR(200)'))
+            conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP'))
 
-        # ------- Config: kanban_stages_json e fifo_stage -------
+        # Config -> campos extras
         if "config" in tables:
-            try:
-                conn.execute(text('ALTER TABLE "config" ADD COLUMN IF NOT EXISTS kanban_stages_json TEXT'))
-            except Exception:
-                pass
-            try:
-                conn.execute(text('ALTER TABLE "config" ADD COLUMN IF NOT EXISTS fifo_stage VARCHAR(64)'))
-            except Exception:
-                pass
+            conn.execute(text('ALTER TABLE "config" ADD COLUMN IF NOT EXISTS kanban_stages_json TEXT'))
+            conn.execute(text('ALTER TABLE "config" ADD COLUMN IF NOT EXISTS fifo_stage VARCHAR(64)'))
 
-
-# -----------------------
+# ---------------------------------------------------------------------
 # Helpers de Estoque FIFO e custos
-# -----------------------
+# ---------------------------------------------------------------------
 def create_lot(session: Session, ingredient_id: int, qty: float, unit: str, unit_price: float,
                best_before: Optional[dt.date]=None, note: Optional[str]=None) -> StockLot:
     lot = StockLot(
@@ -487,16 +446,15 @@ def create_lot(session: Session, ingredient_id: int, qty: float, unit: str, unit
     )
     session.add(lot)
     session.flush()
-    move = StockMove(
+    session.add(StockMove(
         lot_id=lot.id, ingredient_id=ingredient_id, move_type="IN",
         qty=qty, unit=unit, cost=qty*unit_price, notes="Compra/Lote"
-    )
-    session.add(move)
+    ))
     session.commit()
     return lot
 
 def average_cost(session: Session, ingredient_id: int) -> float:
-    # média ponderada pelos lotes restantes; se vazio, tenta preço mais recente
+    """Custo médio ponderado pelos lotes restantes; se vazio, usa último preço cadastrado."""
     lots = session.query(StockLot).filter(
         StockLot.ingredient_id == ingredient_id,
         StockLot.qty_remaining > 0
@@ -506,7 +464,6 @@ def average_cost(session: Session, ingredient_id: int) -> float:
         tot_val = sum(l.qty_remaining * l.buy_price for l in lots)
         if tot_qty > 0:
             return tot_val / tot_qty
-    # fallback para histórico de preço
     p = session.query(IngredientPrice).filter(
         IngredientPrice.ingredient_id==ingredient_id
     ).order_by(IngredientPrice.created_at.desc()).first()
@@ -514,26 +471,29 @@ def average_cost(session: Session, ingredient_id: int) -> float:
 
 def _consume_from_lot(session: Session, lot: StockLot, qty: float, order_id: Optional[int], note: str="Consumo FIFO") -> float:
     taken = min(qty, lot.qty_remaining)
+    if taken <= 0:
+        return 0.0
     lot.qty_remaining -= taken
-    cost = taken * lot.buy_price
-    mv = StockMove(
+    session.add(StockMove(
         lot_id=lot.id, ingredient_id=lot.ingredient_id, move_type="OUT",
-        qty=taken, unit=lot.unit, cost=cost, order_id=order_id, notes=note
-    )
-    session.add(mv)
+        qty=taken, unit=lot.unit, cost=taken*lot.buy_price, order_id=order_id, notes=note
+    ))
     return taken
 
 def consume_fifo(session: Session, ingredient_id: int, qty_needed: float, unit: str,
                  order_id: Optional[int]=None, note:str="Consumo FIFO") -> Tuple[float, float]:
-    """
-    Consome por FIFO (ordenando por validade e depois por criação).
-    Retorna (consumido, faltante).
-    """
-    remaining = qty_needed
-    lots = session.query(StockLot).filter(StockLot.ingredient_id==ingredient_id, StockLot.qty_remaining>0)\
-        .order_by(StockLot.best_before.is_(None), StockLot.best_before.asc(), StockLot.created_at.asc()).all()
+    """Consome por FIFO. Retorna (consumido, faltante)."""
+    remaining = max(qty_needed, 0.0)
+    lots = session.query(StockLot).filter(
+        StockLot.ingredient_id==ingredient_id,
+        StockLot.qty_remaining>0
+    ).order_by(
+        StockLot.best_before.is_(None),
+        StockLot.best_before.asc(),
+        StockLot.created_at.asc()
+    ).all()
     for lot in lots:
-        if remaining <= 0:
+        if remaining <= 1e-12:
             break
         taken = _consume_from_lot(session, lot, remaining, order_id, note)
         remaining -= taken
@@ -558,11 +518,13 @@ def discard_from_lot(session: Session, lot_id: int, qty: float, reason: str="Des
     return taken
 
 def discard_expired(session: Session, ref_date: Optional[dt.date]=None) -> List[Tuple[int, float]]:
-    """Descarta lotes vencidos. Retorna lista [(lot_id, descartado_qty), ...]."""
+    """Descarta lotes vencidos. Retorna [(lot_id, descartado_qty), ...]."""
     today = ref_date or dt.date.today()
     out: List[Tuple[int,float]] = []
     lots = session.query(StockLot).filter(
-        StockLot.best_before.isnot(None), StockLot.qty_remaining>0, StockLot.best_before < today
+        StockLot.best_before.isnot(None),
+        StockLot.qty_remaining>0,
+        StockLot.best_before < today
     ).all()
     for lot in lots:
         q = lot.qty_remaining
@@ -571,9 +533,9 @@ def discard_expired(session: Session, ref_date: Optional[dt.date]=None) -> List[
             out.append((lot.id, taken))
     return out
 
-# -----------------------
-# Explosão de receita (recursiva, sub-receitas)
-# -----------------------
+# ---------------------------------------------------------------------
+# Explosão de receita / custos
+# ---------------------------------------------------------------------
 def explode_recipe(session: Session, recipe_id: int, factor: float = 1.0) -> Dict[int, float]:
     """
     Calcula insumos base (ingredient_id -> quantidade) para produzir 'factor' * rendimento da receita.
@@ -605,7 +567,7 @@ def required_ingredients_for_order(session: Session, order: Order) -> Dict[int, 
     return totals
 
 def ingredient_shortages(session: Session, order: Order) -> List[Tuple[Ingredient, float]]:
-    """Retorna [(ingrediente, faltante_qty>0)]"""
+    """Retorna [(ingrediente, faltante_qty>0)]."""
     req = required_ingredients_for_order(session, order)
     shortages: List[Tuple[Ingredient,float]] = []
     for ing_id, need in req.items():
@@ -617,16 +579,13 @@ def ingredient_shortages(session: Session, order: Order) -> List[Tuple[Ingredien
     return shortages
 
 def consume_fifo_for_order(session: Session, order: Order) -> Dict[int, Tuple[float,float]]:
-    """
-    Consome estoque para todos os ingredientes do pedido.
-    Retorna dict[ingredient_id] = (consumido, faltante)
-    """
+    """Consome estoque para todos os ingredientes do pedido. Retorna {ingredient_id: (consumido, faltante)}"""
     res: Dict[int, Tuple[float,float]] = {}
     req = required_ingredients_for_order(session, order)
     for ing_id, qty in req.items():
         ing = session.get(Ingredient, ing_id)
-        consumed, missing = consume_fifo(session, ing_id, qty, ing.unit if ing else "g", order_id=order.id,
-                                         note=f"Consumo pedido #{order.id}")
+        consumed, missing = consume_fifo(session, ing_id, qty, ing.unit if ing else "g",
+                                         order_id=order.id, note=f"Consumo pedido #{order.id}")
         res[ing_id] = (consumed, missing)
     return res
 
@@ -641,17 +600,15 @@ def estimate_product_unit_cost(session: Session, product: Product) -> float:
         total += qty * unit_cost
     return total
 
-# -----------------------
-# Inicialização DB (create_all + migrations + seeds)
-# -----------------------
+# ---------------------------------------------------------------------
+# Inicialização do DB
+# ---------------------------------------------------------------------
 def init_db(engine):
-    # cria tabelas que não existem
+    # cria tabelas
     Base.metadata.create_all(engine)
-
-    # roda migrações idempotentes (add coluna se faltar, etc.)
+    # migra colunas que possam faltar
     run_safe_migrations(engine)
-
-    # seeds básicos
+    # seeds
     SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
     with SessionLocal() as session:
         seed_default_roles(session)
