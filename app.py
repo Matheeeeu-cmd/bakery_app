@@ -756,53 +756,54 @@ def page_stock():
                     st.rerun()
     
             st.markdown("### Compra manual")
-            ing_opts = cached_ingredients()
-            if not ing_opts:
-                st.info("Cadastre ingredientes primeiro.")
-                return
-            with SessionLocal() as s:
-                with st.form("purchase_form"):
-                    # Fornecedor por dropdown (sem texto livre)
-                    sup_list = s.query(Supplier).order_by(Supplier.name.asc()).all()
-                    sup = st.selectbox("Fornecedor", [None] + sup_list, format_func=lambda x: x.name if x else "-")
+ing_opts = cached_ingredients()
+if not ing_opts:
+    st.info("Cadastre ingredientes primeiro.")
+else:
+    with SessionLocal() as s:
+        with st.form("purchase_form"):
+            # Fornecedor por dropdown (sem texto livre)
+            sup_list = s.query(Supplier).order_by(Supplier.name.asc()).all()
+            sup = st.selectbox("Fornecedor", [None] + sup_list, format_func=lambda x: x.name if x else "-")
 
-                    lines = st.number_input("Itens nesta compra", min_value=1, max_value=20, value=1)
-                    entries = []
-                    for i in range(int(lines)):
-                        cols = st.columns((3, 1, 1, 1, 2))
-                        sel = cols[0].selectbox(f"Ingrediente #{i+1}", ing_opts, key=f"p_ing_{i}", format_func=lambda t: t[1])
-                        qty = cols[1].number_input("Qtd", min_value=0.0, step=0.1, key=f"p_qty_{i}")
-                        unit = cols[2].selectbox("Un", ["g", "un"], key=f"p_unit_{i}")
-                        price = cols[3].number_input("Preço/un", min_value=0.0, step=0.01, key=f"p_price_{i}")
-                        bb = cols[4].date_input("Validade", key=f"p_bb_{i}")
-                        entries.append((sel, qty, unit, price, bb))
+            lines = st.number_input("Itens nesta compra", min_value=1, max_value=20, value=1)
+            entries = []
+            for i in range(int(lines)):
+                cols = st.columns((3, 1, 1, 1, 2))
+                sel = cols[0].selectbox(f"Ingrediente #{i+1}", ing_opts, key=f"p_ing_{i}", format_func=lambda t: t[1])
+                qty = cols[1].number_input("Qtd", min_value=0.0, step=0.1, key=f"p_qty_{i}")
+                unit = cols[2].selectbox("Un", ["g", "un"], key=f"p_unit_{i}")
+                price = cols[3].number_input("Preço/un", min_value=0.0, step=0.01, key=f"p_price_{i}")
+                bb = cols[4].date_input("Validade", key=f"p_bb_{i}")
+                entries.append((sel, qty, unit, price, bb))
 
-                    ok = st.form_submit_button("Registrar compra")
-                    if ok:
-                        if not can("stock.create_purchase"):
-                              toast_err("Sem permissão.")
-                        else:
-                            total = 0.0
-                            p = ManualPurchase(supplier_id=(sup.id if sup else None), total=0.0)
-                            s.add(p); s.flush()
+            submit = st.form_submit_button("Registrar compra")
+            if submit:
+                if not can("stock.create_purchase"):
+                    toast_err("Sem permissão.")
+                else:
+                    total = 0.0
+                    p = ManualPurchase(supplier_id=(sup.id if sup else None), total=0.0)
+                    s.add(p); s.flush()
 
-                             from db import create_lot
-                             for (sel, qty, unit, price, bb) in entries:
-                                ing_id = int(sel[0])
-                                s.add(ManualPurchaseItem(
-                                  purchase_id=p.id,
-                                ingredient_id=ing_id,
-                                qty=qty,
-                                unit=unit,
-                                price=price
-                            ))
-                            create_lot(s, ing_id, qty, unit, price, bb, note=f"Compra #{p.id}")
-                            total += (qty or 0.0) * (price or 0.0)
+                    from db import create_lot
+                    for (sel, qty, unit, price, bb) in entries:
+                        ing_id = int(sel[0])
+                        s.add(ManualPurchaseItem(
+                            purchase_id=p.id,
+                            ingredient_id=ing_id,
+                            qty=qty,
+                            unit=unit,
+                            price=price
+                        ))
+                        create_lot(s, ing_id, qty, unit, price, bb, note=f"Compra #{p.id}")
+                        total += (qty or 0.0) * (price or 0.0)
 
-                        p.total = total
-                        s.commit()
-                        toast_ok(f"Compra registrada (total {fmt_money(total)}).")
-                        st.rerun()
+                    p.total = total
+                    s.commit()
+                    toast_ok(f"Compra registrada (total {fmt_money(total)}).")
+                    st.rerun()
+
                         
         st.markdown("### Ajustes / Vencidos")
         lots = s.query(StockLot).order_by(StockLot.best_before.is_(None), StockLot.best_before.asc(), StockLot.created_at.asc()).limit(200).all()
