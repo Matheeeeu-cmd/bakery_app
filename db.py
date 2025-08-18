@@ -107,6 +107,29 @@ class User(Base):
     created_at = Column(DateTime, default=dt.datetime.utcnow)
     roles = relationship("Role", secondary=user_role_table, back_populates="users")
 
+class LoginToken(Base):
+    __tablename__ = "login_token"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False)
+    token = Column(String(64), unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+def create_login_token(session: Session, user_id: int) -> str:
+    import secrets
+    tok = secrets.token_hex(24)
+    session.add(LoginToken(user_id=user_id, token=tok))
+    session.commit()
+    return tok
+
+def get_user_by_token(session: Session, token: str) -> Optional[User]:
+    lt = session.query(LoginToken).filter(LoginToken.token == token).first()
+    return session.get(User, lt.user_id) if lt else None
+
+def delete_token(session: Session, token: str):
+    session.query(LoginToken).filter(LoginToken.token == token).delete()
+    session.commit()
+
+
 class Supplier(Base):
     __tablename__ = "supplier"
     id = Column(Integer, primary_key=True)
