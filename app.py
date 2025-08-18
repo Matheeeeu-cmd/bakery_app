@@ -263,13 +263,16 @@ def page_ingredients():
     if not can("page.ingredients"):
         st.info("Sem permissão para visualizar.")
         return
+
     tab1, tab2, tab3 = st.tabs(["Lista", "Compra por Lote", "Histórico de Preços"])
+
     with SessionLocal() as s:
+        # ---------------- Tab 1: Lista / CRUD rápido ----------------
         with tab1:
             st.markdown("### Cadastro Rápido")
             with st.form("ing_form"):
                 name = st.text_input("Nome")
-                unit = st.selectbox("Unidade padrão", ["g","un"])
+                unit = st.selectbox("Unidade padrão", ["g", "un"])
                 active = st.checkbox("Ativo", value=True)
                 ok = st.form_submit_button("Salvar")
                 if ok:
@@ -278,7 +281,7 @@ def page_ingredients():
                     elif not name:
                         toast_err("Informe o nome.")
                     else:
-                        if s.query(Ingredient).filter(Ingredient.name==name).first():
+                        if s.query(Ingredient).filter(Ingredient.name == name).first():
                             toast_err("Ingrediente já existe.")
                         else:
                             s.add(Ingredient(name=name, unit=unit, is_active=active))
@@ -286,13 +289,19 @@ def page_ingredients():
                             cached_ingredients.clear()
                             toast_ok("Ingrediente criado.")
                             st.rerun()
+
             st.markdown("### Editar Ingrediente")
             all_ings = s.query(Ingredient).order_by(Ingredient.name.asc()).all()
             ing_sel = st.selectbox("Selecione para editar", all_ings, format_func=lambda i: i.name if i else "-")
             if ing_sel:
-                c1, c2, c3 = st.columns([3,1,1])
+                c1, c2, c3 = st.columns([3, 1, 1])
                 new_name = c1.text_input("Nome", value=ing_sel.name, key=f"ing_edit_name_{ing_sel.id}")
-                new_unit = c2.selectbox("Unidade padrão", ["g","un"], index=(0 if (ing_sel.unit or "g")=="g" else 1), key=f"ing_edit_unit_{ing_sel.id}")
+                new_unit = c2.selectbox(
+                    "Unidade padrão",
+                    ["g", "un"],
+                    index=(0 if (ing_sel.unit or "g") == "g" else 1),
+                    key=f"ing_edit_unit_{ing_sel.id}",
+                )
                 new_active = c3.checkbox("Ativo", value=bool(ing_sel.is_active), key=f"ing_edit_active_{ing_sel.id}")
                 if st.button("Salvar alterações", key=f"ing_edit_save_{ing_sel.id}"):
                     if not can("ingredient.update"):
@@ -307,20 +316,26 @@ def page_ingredients():
                         st.rerun()
 
             st.markdown("### Lista")
-            ings = s.query(Ingredient).order_by(Ingredient.is_active.desc(), Ingredient.name.asc())\
-                .with_entities(Ingredient.id, Ingredient.name, Ingredient.unit, Ingredient.is_active).all()
-            df = pd.DataFrame(ings, columns=["ID","Nome","Unidade","Ativo"])
+            ings = (
+                s.query(Ingredient)
+                .order_by(Ingredient.is_active.desc(), Ingredient.name.asc())
+                .with_entities(Ingredient.id, Ingredient.name, Ingredient.unit, Ingredient.is_active)
+                .all()
+            )
+            df = pd.DataFrame(ings, columns=["ID", "Nome", "Unidade", "Ativo"])
             st.dataframe(df, hide_index=True, use_container_width=True)
+
+        # ---------------- Tab 2: Compra por Lote ----------------
         with tab2:
             st.markdown("### Registrar Compra/Lote")
             ing_opts = cached_ingredients()
             if not ing_opts:
                 st.info("Cadastre ingredientes antes.")
             else:
-                ing_name_to_id = {n: i for i, n, _ in ing_opts}
+                ing_map = {n: i for i, n, _ in ing_opts}
                 col1, col2 = st.columns(2)
                 sel_name = col1.selectbox("Ingrediente", [n for _, n, _ in ing_opts])
-                unit = col2.selectbox("Unidade do lote", ["g","un"])
+                unit = col2.selectbox("Unidade do lote", ["g", "un"])
                 qty = st.number_input("Quantidade", min_value=0.0, step=0.1)
                 price = st.number_input("Preço por unidade", min_value=0.0, step=0.01)
                 best_before = st.date_input("Validade (opcional)", value=None)
@@ -330,37 +345,51 @@ def page_ingredients():
                         toast_err("Sem permissão.")
                     else:
                         from db import create_lot
-                        create_lot(s, ing_name_to_id[sel_name], qty, unit, price, best_before, note)
+                        create_lot(s, ing_map[sel_name], qty, unit, price, best_before, note)
                         toast_ok("Lote criado.")
                         st.rerun()
+
             st.markdown("### Estoque por Lotes (resumo)")
-            lots = s.query(StockLot).order_by(StockLot.best_before.is_(None), StockLot.best_before.asc(), StockLot.created_at.asc())\
-                .with_entities(StockLot.id, StockLot.ingredient_id, StockLot.qty_remaining, StockLot.unit, StockLot.best_before).all()
-            id_to_ing = {i.id:i.name for i in s.query(Ingredient).all()}
-            rows = [{"Lote":lid, "Ingrediente": id_to_ing.get(iid,"?"), "Qtd restante": qty, "Un":u, "Validade": bb} for lid, iid, qty, u, bb in lots]
+            lots = (
+                s.query(StockLot)
+                .order_by(StockLot.best_before.is_(None), StockLot.best_before.asc(), StockLot.created_at.asc())
+                .with_entities(StockLot.id, StockLot.ingredient_id, StockLot.qty_remaining, StockLot.unit, StockLot.best_before)
+                .all()
+            )
+            id_to_ing = {i.id: i.name for i in s.query(Ingredient).all()}
+            rows = [
+                {"Lote": lid, "Ingrediente": id_to_ing.get(iid, "?"), "Qtd restante": qty, "Un": u, "Validade": bb}
+                for lid, iid, qty, u, bb in lots
+            ]
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+        # ---------------- Tab 3: Histórico de Preços ----------------
         with tab3:
             st.markdown("### Preços — incluir/consultar")
             ing_opts = cached_ingredients()
             if ing_opts:
-                ing_name_to_id = {n: i for i, n, _ in ing_opts}
+                ing_map = {n: i for i, n, _ in ing_opts}
                 c1, c2 = st.columns(2)
-        sel_name = c1.selectbox("Ingrediente", [n for _, n, _ in ing_opts], key="price_hist_ing")
-        price = c2.number_input("Preço (por unidade)", min_value=0.0, step=0.01, key="price_hist_val")
-        if st.button("Salvar preço", key="btn_price_save"):
-            with SessionLocal() as s:
-                s.add(IngredientPrice(ingredient_id=ing_map[sel_name], price=price))
-                s.commit()
-                toast_ok("Preço registrado.")
+                sel_name = c1.selectbox("Ingrediente", [n for _, n, _ in ing_opts], key="price_hist_ing")
+                price = c2.number_input("Preço (por unidade)", min_value=0.0, step=0.01, key="price_hist_val")
 
-        with SessionLocal() as s:
-            q = s.query(IngredientPrice).join(Ingredient, IngredientPrice.ingredient_id == Ingredient.id)
-            q = q.filter(Ingredient.name == sel_name).order_by(IngredientPrice.created_at.desc()).limit(200)
-            prices = q.all()
-            rows = [{"Quando": p.created_at, "Preço": p.price} for p in prices]
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-    else:
-        st.info("Cadastre ingredientes antes.")
+                if st.button("Salvar preço", key="btn_price_save"):
+                    s.add(IngredientPrice(ingredient_id=ing_map[sel_name], price=price))
+                    s.commit()
+                    toast_ok("Preço registrado.")
+
+                q = (
+                    s.query(IngredientPrice)
+                    .join(Ingredient, IngredientPrice.ingredient_id == Ingredient.id)
+                    .filter(Ingredient.name == sel_name)
+                    .order_by(IngredientPrice.created_at.desc())
+                    .limit(200)
+                )
+                prices = q.all()
+                rows = [{"Quando": p.created_at, "Preço": p.price} for p in prices]
+                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            else:
+                st.info("Cadastre ingredientes antes.")
 
 def page_recipes():
     st.subheader("Receitas")
