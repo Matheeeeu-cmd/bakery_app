@@ -1,5 +1,6 @@
 # app.py
 # Onde colar: salve como "app.py" na raiz do projeto.
+
 import os
 import json
 import bcrypt
@@ -32,7 +33,9 @@ def get_engine_and_sessionmaker():
 
 engine, SessionLocal = get_engine_and_sessionmaker()
 
+# -----------------------
 # Auto-login via token na URL
+# -----------------------
 def try_auto_login_from_token():
     params = st.query_params
     tok = params.get("token", [None])
@@ -49,7 +52,7 @@ try_auto_login_from_token()
 # -----------------------
 # Utils UI
 # -----------------------
-def copy_hint(msg: str="Dica: use Ctrl+C/Cmd+C para copiar."):
+def copy_hint(msg: str = "Dica: use Ctrl+C/Cmd+C para copiar."):
     st.caption(msg)
 
 def fmt_money(v: float) -> str:
@@ -65,11 +68,8 @@ def toast_err(msg: str):
     st.error(msg)
 
 def can(code: str) -> bool:
-    if not st.session_state.get("perms"):
-        return False
-    perms: Set[str] = st.session_state["perms"]
-    # admin visualiza tudo (tem todas permissões carregadas)
-    return code in perms or perms == ALL_PERMISSIONS
+    perms: Set[str] = st.session_state.get("perms") or set()
+    return (code in perms) or (perms == ALL_PERMISSIONS)
 
 PAGE_PERMISSION = {
     "Dashboard": "page.dashboard",
@@ -136,8 +136,7 @@ def create_first_admin():
                     return
                 u = User(username=username, name=name, email=email, password_hash=phash, is_active=True)
                 s.add(u); s.flush()
-                # garantir que papel admin existe e atribuir
-                admin_role = s.query(Role).filter(Role.name=="admin").first()
+                admin_role = s.query(Role).filter(Role.name == "admin").first()
                 if not admin_role:
                     toast_err("Papel 'admin' não encontrado. Reinicie o app.")
                     return
@@ -158,7 +157,7 @@ def login_sidebar():
                 with SessionLocal() as s:
                     delete_token(s, tok)
             st.query_params.clear()
-            for k in ["user","perms"]:
+            for k in ["user", "perms"]:
                 st.session_state.pop(k, None)
             st.rerun()
         return
@@ -169,17 +168,16 @@ def login_sidebar():
         ok = st.form_submit_button("Entrar")
         if ok:
             with SessionLocal() as s:
-                u = s.query(User).filter(User.username==username, User.is_active==True).first()
+                u = s.query(User).filter(User.username == username, User.is_active == True).first()
                 if not u or not bcrypt.checkpw(pwd.encode("utf-8"), (u.password_hash or "").encode("utf-8")):
                     toast_err("Credenciais inválidas.")
                     return
                 st.session_state["user"] = {"id": u.id, "username": u.username}
                 st.session_state["perms"] = get_user_permissions(s, u)
 
-                # >>> adicionados conforme solicitado <<<
+                # Token na URL para manter login ao dar F5
                 tok = create_login_token(s, u.id)
                 st.query_params["token"] = tok
-                # >>> fim adição <<<
 
                 toast_ok("Login efetuado.")
                 st.rerun()
@@ -204,13 +202,13 @@ def allowed_pages() -> List[str]:
         return []
     pages = []
     for label, perm in PAGE_PERMISSION.items():
-        if can(perm) or can("page.settings"):  # admin/gestão sempre enxerga menu completo
+        if can(perm) or can("page.settings"):
             pages.append(label)
     return pages
 
 def app_header():
     st.title("🍰 Gestão de Confeitaria/Restaurante")
-    st.caption("Streamlit + SQLAlchemy • RBAC • Kanban • Estoque FIFO por lotes • Pronto para outros ramos de alimentação")
+    # Removido subtítulo longo a pedido do usuário.
 
 def load_config() -> Config:
     with SessionLocal() as s:
@@ -236,18 +234,14 @@ def page_dashboard():
         today = dt.date.today()
         today_orders = s.query(Order).filter(Order.delivery_date == today).count()
 
-        # ganhos (faturamento) = pedidos ENTREGUE
-        revenue = s.query(Order).filter(Order.status=="ENTREGUE").with_entities(
-            (Order.total).label("rev")
-        ).all()
+        revenue = s.query(Order).filter(Order.status == "ENTREGUE") \
+            .with_entities((Order.total).label("rev")).all()
         revenue_sum = sum(x.rev or 0.0 for x in revenue)
 
-        # perdas (custo perdido) pelos movimentos LOSS
-        loss_moves = s.query(StockMove).filter(StockMove.move_type=="LOSS").all()
+        loss_moves = s.query(StockMove).filter(StockMove.move_type == "LOSS").all()
         loss_sum = sum((m.cost or 0.0) for m in loss_moves)
 
-        # custo estimado produzido = soma de cost OUT
-        out_moves = s.query(StockMove).filter(StockMove.move_type=="OUT").all()
+        out_moves = s.query(StockMove).filter(StockMove.move_type == "OUT").all()
         cost_out_sum = sum((m.cost or 0.0) for m in out_moves)
 
     c = st.columns(4)
@@ -299,7 +293,7 @@ def page_ingredients():
                 new_unit = c2.selectbox(
                     "Unidade padrão",
                     ["g", "un"],
-                    index=(0 if (ing_sel.unit or "g") == "g" else 1),
+                    index=(0 if ( ing_sel.unit or "g") == "g" else 1),
                     key=f"ing_edit_unit_{ing_sel.id}",
                 )
                 new_active = c3.checkbox("Ativo", value=bool(ing_sel.is_active), key=f"ing_edit_active_{ing_sel.id}")
@@ -401,7 +395,7 @@ def page_recipes():
         with st.form("rec_new"):
             name = st.text_input("Nome da receita")
             yield_qty = st.number_input("Rendimento (quantidade total)", min_value=0.0, value=1.0)
-            unit = st.selectbox("Unidade do rendimento", ["un","g"])
+            unit = st.selectbox("Unidade do rendimento", ["un", "g"])
             ok = st.form_submit_button("Criar")
             if ok:
                 if not can("recipe.create"):
@@ -409,7 +403,7 @@ def page_recipes():
                 elif not name:
                     toast_err("Informe o nome.")
                 else:
-                    if s.query(Recipe).filter(Recipe.name==name).first():
+                    if s.query(Recipe).filter(Recipe.name == name).first():
                         toast_err("Já existe.")
                     else:
                         s.add(Recipe(name=name, yield_qty=yield_qty, unit=unit, is_active=True))
@@ -425,9 +419,9 @@ def page_recipes():
             ing_opts = cached_ingredients()
             with st.form("rec_item_add"):
                 col1, col2, col3 = st.columns(3)
-                opt = col1.selectbox("Tipo de item", ["Ingrediente","Sub-receita"])
+                opt = col1.selectbox("Tipo de item", ["Ingrediente", "Sub-receita"])
                 qty = col2.number_input("Quantidade", min_value=0.0, step=0.1)
-                item_type = col3.selectbox("Tipo de medida", ["peso","unidade"])
+                item_type = col3.selectbox("Tipo de medida", ["peso", "unidade"])
                 ingr = None; subr = None
                 if opt == "Ingrediente":
                     ingr = st.selectbox("Ingrediente", ing_opts, format_func=lambda t: t[1])
@@ -443,13 +437,13 @@ def page_recipes():
                     toast_ok("Item adicionado.")
                     st.rerun()
             st.markdown("#### Itens")
-            items = s.query(RecipeItem).filter(RecipeItem.recipe_id==rec_sel.id).all()
+            items = s.query(RecipeItem).filter(RecipeItem.recipe_id == rec_sel.id).all()
             rows = []
             for it in items:
                 if it.ingredient:
-                    rows.append({"Tipo":"Ingrediente","Nome":it.ingredient.name,"Qtd":it.qty,"Medida":it.item_type})
+                    rows.append({"Tipo": "Ingrediente", "Nome": it.ingredient.name, "Qtd": it.qty, "Medida": it.item_type})
                 elif it.sub_recipe:
-                    rows.append({"Tipo":"Sub-receita","Nome":it.sub_recipe.name,"Qtd":it.qty,"Medida":it.item_type})
+                    rows.append({"Tipo": "Sub-receita", "Nome": it.sub_recipe.name, "Qtd": it.qty, "Medida": it.item_type})
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 # -----------------------
@@ -474,16 +468,20 @@ def page_products():
                 elif not name:
                     toast_err("Nome obrigatório.")
                 else:
-                    if s.query(Product).filter(Product.name==name).first():
+                    if s.query(Product).filter(Product.name == name).first():
                         toast_err("Já existe.")
                     else:
-                        s.add(Product(name=name, recipe_id=(recipe.id if recipe else None),
-                                      is_active=True, price_manual=(price_manual or None) if price_manual>0 else None))
+                        s.add(Product(
+                            name=name,
+                            recipe_id=(recipe.id if recipe else None),
+                            is_active=True,
+                            price_manual=(price_manual or None) if price_manual > 0 else None
+                        ))
                         s.commit()
                         cached_products.clear()
                         toast_ok("Produto criado.")
                         st.rerun()
-                        
+
         st.markdown("### Lista / Preço sugerido")
         cfg = get_or_create_default_config(s)
         data = []
@@ -492,16 +490,17 @@ def page_products():
             suggested = cost * (1.0 + (cfg.margin_default or 0.60))
             price_show = p.price_manual if p.price_manual else suggested
             data.append([p.id, p.name, p.recipe.name if p.recipe else "-", fmt_money(cost), fmt_money(suggested), fmt_money(price_show), p.is_active])
-        df = pd.DataFrame(data, columns=["ID","Nome","Receita","Custo unitário","Sugestão","Preço exibido","Ativo"])
+        df = pd.DataFrame(data, columns=["ID", "Nome", "Receita", "Custo unitário", "Sugestão", "Preço exibido", "Ativo"])
         st.dataframe(df, hide_index=True, use_container_width=True)
+
         st.markdown("### Editar produto")
         allp = s.query(Product).order_by(Product.name.asc()).all()
         psel = st.selectbox("Selecione", allp, format_func=lambda p: p.name if p else "-")
         if psel:
-            c1, c2, c3, c4 = st.columns([3,2,1,1])
+            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
             new_name = c1.text_input("Nome", value=psel.name, key=f"pname_{psel.id}")
             recs = s.query(Recipe).order_by(Recipe.name.asc()).all()
-            new_rec = c2.selectbox("Receita", [None] + recs, index=(0 if not psel.recipe else 1+recs.index(psel.recipe)), format_func=lambda r: (r.name if r else "-"), key=f"prec_{psel.id}")
+            new_rec = c2.selectbox("Receita", [None] + recs, index=(0 if not psel.recipe else 1 + recs.index(psel.recipe)), format_func=lambda r: (r.name if r else "-"), key=f"prec_{psel.id}")
             new_price_manual = c3.number_input("Preço manual", min_value=0.0, value=float(psel.price_manual or 0.0), step=0.01, key=f"pprice_{psel.id}")
             new_active = c4.checkbox("Ativo", value=bool(psel.is_active), key=f"pactive_{psel.id}")
             if st.button("Salvar produto", key=f"psave_{psel.id}"):
@@ -546,7 +545,7 @@ def page_clients():
         cs = s.query(Client).order_by(Client.name.asc()).all()
         sel = st.selectbox("Selecione", cs, format_func=lambda c: c.name if c else "-")
         if sel:
-            c1, c2 = st.columns([2,1])
+            c1, c2 = st.columns([2, 1])
             new_name = c1.text_input("Nome", value=sel.name, key=f"cli_name_{sel.id}")
             new_phone = c2.text_input("Telefone", value=sel.phone or "", key=f"cli_phone_{sel.id}")
             new_addr = st.text_input("Endereço", value=sel.address or "", key=f"cli_addr_{sel.id}")
@@ -572,7 +571,7 @@ def page_clients():
         if q:
             query = query.filter(Client.name.ilike(f"%{q}%"))
         clients = query.order_by(Client.is_active.desc(), Client.name.asc()).limit(500).all()
-        rows = [{"ID":c.id,"Nome":c.name,"Telefone":c.phone,"Ativo":c.is_active} for c in clients]
+        rows = [{"ID": c.id, "Nome": c.name, "Telefone": c.phone, "Ativo": c.is_active} for c in clients]
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 def _order_total(items: List[OrderItem]) -> float:
@@ -594,7 +593,7 @@ def page_order_new():
             item_rows = st.number_input("Quantos itens adicionar nesta tela?", min_value=1, max_value=10, value=1)
             entries = []
             for i in range(int(item_rows)):
-                cols = st.columns((3,1,1))
+                cols = st.columns((3, 1, 1))
                 prod = cols[0].selectbox(f"Produto #{i+1}", pr_opts, key=f"prod_{i}", format_func=lambda t: t[1])
                 qty = cols[1].number_input(f"Qtd #{i+1}", min_value=0.0, step=1.0, value=1.0, key=f"qty_{i}")
                 price = cols[2].number_input(f"Preço unit. #{i+1}", min_value=0.0, step=0.01, value=0.0, key=f"price_{i}")
@@ -608,14 +607,26 @@ def page_order_new():
                 if not entries:
                     toast_err("Adicione ao menos um item.")
                     return
-                o = Order(client_id=client[0] if client else None, delivery_date=delivery, status="NOVO", paid=paid, obs=obs, total=0.0)
+                o = Order(
+                    client_id=client[0] if client else None,
+                    delivery_date=delivery,
+                    status="NOVO",
+                    paid=paid,
+                    obs=obs,
+                    total=0.0
+                )
                 s.add(o); s.flush()
                 cfg = get_or_create_default_config(s)
                 for (prod, qty, price) in entries:
                     p = s.get(Product, int(prod[0]))
                     cost = estimate_product_unit_cost(s, p)
-                    it = OrderItem(order_id=o.id, product_id=p.id, qty=qty, unit_price=price if price>0 else cost*(1.0+(cfg.margin_default or 0.60)),
-                                   unit_cost_snapshot=cost)
+                    it = OrderItem(
+                        order_id=o.id,
+                        product_id=p.id,
+                        qty=qty,
+                        unit_price=price if price > 0 else cost * (1.0 + (cfg.margin_default or 0.60)),
+                        unit_cost_snapshot=cost
+                    )
                     s.add(it)
                 s.flush()
                 o.total = _order_total(o.items)
@@ -642,9 +653,9 @@ def page_kanban():
         for idx, stage in enumerate(stages):
             with cols[idx]:
                 st.markdown(f"#### {stage}")
-                q = s.query(Order).filter(Order.status==stage)
+                q = s.query(Order).filter(Order.status == stage)
                 if date_filter:
-                    q = q.filter(Order.delivery_date==date_filter)
+                    q = q.filter(Order.delivery_date == date_filter)
                 if client_query:
                     q = q.join(Client, isouter=True).filter(Client.name.ilike(f"%{client_query}%"))
                 orders = q.order_by(Order.delivery_date.asc().nulls_last(), Order.created_at.asc()).limit(50).all()
@@ -655,10 +666,12 @@ def page_kanban():
                         st.markdown(f"**#{o.id}** — {cli_name}")
                         st.caption(f"Itens: {items_txt}")
                         st.caption(f"Total: {fmt_money(o.total or 0.0)}  •  Entrega: {o.delivery_date or '-'}")
+
                         # Faltas
                         sh = ingredient_shortages(s, o)
                         if sh:
                             st.warning("Faltando: " + ", ".join([f"{ing.name} ({qtd:.2f})" for ing, qtd in sh if ing]))
+
                         # Pago toggle
                         colp1, colp2 = st.columns(2)
                         if colp1.button(("✓ Desmarcar Pago" if o.paid else "💰 Marcar Pago"), key=f"paid_{stage}_{o.id}"):
@@ -669,6 +682,7 @@ def page_kanban():
                                 st.rerun()
                             else:
                                 toast_err("Sem permissão.")
+
                         # Mensagens
                         msg_cols = st.columns(2)
                         prod_msg = render_message(cfg.msg_producao, o, items_txt)
@@ -679,29 +693,30 @@ def page_kanban():
                         with msg_cols[1]:
                             st.text_area("Mensagem: Cliente (Pronto)", pronto_msg, height=80, key=f"mpronto_{o.id}")
                             copy_hint()
+
                         # Mover estágio
                         if stage != "CANCELADO":
                             i_stage = stages.index(stage)
                             nexts = []
-                            if i_stage+1 < len(stages): nexts.append(stages[i_stage+1])
-                            if i_stage+2 < len(stages): nexts.append(stages[i_stage+2])  # pular
+                            if i_stage + 1 < len(stages): nexts.append(stages[i_stage + 1])
+                            if i_stage + 2 < len(stages): nexts.append(stages[i_stage + 2])  # pular
                             if nexts:
-                                mv = st.selectbox("Mover para:", ["-"]+nexts, key=f"mv_{o.id}")
+                                mv = st.selectbox("Mover para:", ["-"] + nexts, key=f"mv_{o.id}")
                                 if mv != "-" and st.button("Mover", key=f"btn_mv_{o.id}"):
                                     if can("order.move_stage"):
-                                        # se entrando no estágio de consumo, consumir FIFO
                                         entering_consume = (mv == consume_stage and o.status != consume_stage)
                                         o.status = mv
                                         s.commit()
                                         if entering_consume and can("order.consume_fifo"):
                                             res = consume_fifo_for_order(s, o)
-                                            faltantes = {ing_id: miss for ing_id, (_, miss) in res.items() if miss>1e-9}
+                                            faltantes = {ing_id: miss for ing_id, (_, miss) in res.items() if miss > 1e-9}
                                             if faltantes:
                                                 st.warning("Consumo aplicado com faltas em alguns ingredientes.")
                                             toast_ok("Estoque consumido (FIFO).")
                                         st.rerun()
                                     else:
                                         toast_err("Sem permissão.")
+
                         # Cancelar
                         if st.button("Cancelar", key=f"cancel_{o.id}"):
                             just = st.text_input("Justificativa do cancelamento", key=f"just_{o.id}")
@@ -724,15 +739,15 @@ def page_postsale():
     if not can("page.postsale"):
         st.info("Sem permissão.")
         return
-    stages = ["ENTREGUE","POS1","POS2","DONE"]
+    stages = ["ENTREGUE", "POS1", "POS2", "DONE"]
     with SessionLocal() as s:
-        q = s.query(Order).filter(Order.status=="ENTREGUE").order_by(Order.delivery_date.desc()).limit(200)
+        q = s.query(Order).filter(Order.status == "ENTREGUE").order_by(Order.delivery_date.desc()).limit(200)
         orders = q.all()
         for o in orders:
             with st.container(border=True):
                 st.markdown(f"**#{o.id}** — {o.client.name if o.client else '—'} • Entrega {o.delivery_date or '-'}")
                 i = stages.index(o.pos_stage) if o.pos_stage in stages else 0
-                nxt = stages[i+1] if i+1 < len(stages) else None
+                nxt = stages[i + 1] if i + 1 < len(stages) else None
                 note = st.text_input("Notas", value=o.obs or "", key=f"pos_note_{o.id}")
                 if st.button("Salvar notas", key=f"pos_save_{o.id}"):
                     o.obs = note
@@ -751,8 +766,8 @@ def page_calendar():
         return
     with SessionLocal() as s:
         day = st.date_input("Dia", value=dt.date.today())
-        orders = s.query(Order).filter(Order.delivery_date==day).order_by(Order.created_at.asc()).all()
-        rows = [{"#":o.id,"Cliente": (o.client.name if o.client else "—"), "Status": o.status, "Pago": "Sim" if o.paid else "Não", "Total": fmt_money(o.total or 0.0)} for o in orders]
+        orders = s.query(Order).filter(Order.delivery_date == day).order_by(Order.created_at.asc()).all()
+        rows = [{"#": o.id, "Cliente": (o.client.name if o.client else "—"), "Status": o.status, "Pago": "Sim" if o.paid else "Não", "Total": fmt_money(o.total or 0.0)} for o in orders]
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 def page_stock():
@@ -760,7 +775,9 @@ def page_stock():
     if not can("page.stock"):
         st.info("Sem permissão.")
         return
+
     with SessionLocal() as s:
+        # ---------------- Fornecedores ----------------
         st.markdown("### Fornecedores")
         with st.form("sup_new"):
             sname = st.text_input("Nome do fornecedor")
@@ -772,70 +789,71 @@ def page_stock():
                     st.rerun()
         sup_all = s.query(Supplier).order_by(Supplier.name.asc()).all()
         if sup_all:
-            sup_sel = st.selectbox("Editar fornecedor", [None]+sup_all, format_func=lambda x: x.name if x else "-")
+            sup_sel = st.selectbox("Editar fornecedor", [None] + sup_all, format_func=lambda x: x.name if x else "-")
             if sup_sel:
                 n1, n2 = st.columns(2)
                 nname = n1.text_input("Nome", value=sup_sel.name or "", key=f"supn_{sup_sel.id}")
                 ncont = n2.text_input("Contato", value=sup_sel.contact or "", key=f"supc_{sup_sel.id}")
                 if st.button("Salvar fornecedor", key=f"supsave_{sup_sel.id}"):
-                    sup_sel.name = nname.strip() or sup_sel.name
+                    sup_sel.name = (nname or sup_sel.name).strip()
                     sup_sel.contact = ncont
                     s.commit()
                     toast_ok("Fornecedor atualizado.")
                     st.rerun()
-    
-            st.markdown("### Compra manual")
-ing_opts = cached_ingredients()
-if not ing_opts:
-    st.info("Cadastre ingredientes primeiro.")
-else:
-    with SessionLocal() as s:
-        with st.form("purchase_form"):
-            # Fornecedor por dropdown (sem texto livre)
-            sup_list = s.query(Supplier).order_by(Supplier.name.asc()).all()
-            sup = st.selectbox("Fornecedor", [None] + sup_list, format_func=lambda x: x.name if x else "-")
 
-            lines = st.number_input("Itens nesta compra", min_value=1, max_value=20, value=1)
-            entries = []
-            for i in range(int(lines)):
-                cols = st.columns((3, 1, 1, 1, 2))
-                sel = cols[0].selectbox(f"Ingrediente #{i+1}", ing_opts, key=f"p_ing_{i}", format_func=lambda t: t[1])
-                qty = cols[1].number_input("Qtd", min_value=0.0, step=0.1, key=f"p_qty_{i}")
-                unit = cols[2].selectbox("Un", ["g", "un"], key=f"p_unit_{i}")
-                price = cols[3].number_input("Preço/un", min_value=0.0, step=0.01, key=f"p_price_{i}")
-                bb = cols[4].date_input("Validade", key=f"p_bb_{i}")
-                entries.append((sel, qty, unit, price, bb))
+        # ---------------- Compra manual ----------------
+        st.markdown("### Compra manual")
+        ing_opts = cached_ingredients()
+        if not ing_opts:
+            st.info("Cadastre ingredientes primeiro.")
+        else:
+            with st.form("purchase_form"):
+                sup_list = s.query(Supplier).order_by(Supplier.name.asc()).all()
+                sup = st.selectbox("Fornecedor", [None] + sup_list, format_func=lambda x: x.name if x else "-")
 
-            submit = st.form_submit_button("Registrar compra")
-            if submit:
-                if not can("stock.create_purchase"):
-                    toast_err("Sem permissão.")
-                else:
-                    total = 0.0
-                    p = ManualPurchase(supplier_id=(sup.id if sup else None), total=0.0)
-                    s.add(p); s.flush()
+                lines = st.number_input("Itens nesta compra", min_value=1, max_value=20, value=1)
+                entries = []
+                for i in range(int(lines)):
+                    cols = st.columns((3, 1, 1, 1, 2))
+                    sel = cols[0].selectbox(f"Ingrediente #{i+1}", ing_opts, key=f"p_ing_{i}", format_func=lambda t: t[1])
+                    qty = cols[1].number_input("Qtd", min_value=0.0, step=0.1, key=f"p_qty_{i}")
+                    unit = cols[2].selectbox("Un", ["g", "un"], key=f"p_unit_{i}")
+                    price = cols[3].number_input("Preço/un", min_value=0.0, step=0.01, key=f"p_price_{i}")
+                    bb = cols[4].date_input("Validade", key=f"p_bb_{i}")
+                    entries.append((sel, qty, unit, price, bb))
 
-                    from db import create_lot
-                    for (sel, qty, unit, price, bb) in entries:
-                        ing_id = int(sel[0])
-                        s.add(ManualPurchaseItem(
-                            purchase_id=p.id,
-                            ingredient_id=ing_id,
-                            qty=qty,
-                            unit=unit,
-                            price=price
-                        ))
-                        create_lot(s, ing_id, qty, unit, price, bb, note=f"Compra #{p.id}")
-                        total += (qty or 0.0) * (price or 0.0)
+                submit = st.form_submit_button("Registrar compra")
+                if submit:
+                    if not can("stock.create_purchase"):
+                        toast_err("Sem permissão.")
+                    else:
+                        total = 0.0
+                        p = ManualPurchase(supplier_id=(sup.id if sup else None), total=0.0)
+                        s.add(p); s.flush()
 
-                    p.total = total
-                    s.commit()
-                    toast_ok(f"Compra registrada (total {fmt_money(total)}).")
-                    st.rerun()
+                        from db import create_lot
+                        for (sel, qty, unit, price, bb) in entries:
+                            ing_id = int(sel[0])
+                            s.add(ManualPurchaseItem(
+                                purchase_id=p.id,
+                                ingredient_id=ing_id,
+                                qty=qty,
+                                unit=unit,
+                                price=price
+                            ))
+                            create_lot(s, ing_id, qty, unit, price, bb, note=f"Compra #{p.id}")
+                            total += (qty or 0.0) * (price or 0.0)
 
-                        
+                        p.total = total
+                        s.commit()
+                        toast_ok(f"Compra registrada (total {fmt_money(total)}).")
+                        st.rerun()
+
+        # ---------------- Ajustes / Vencidos ----------------
         st.markdown("### Ajustes / Vencidos")
-        lots = s.query(StockLot).order_by(StockLot.best_before.is_(None), StockLot.best_before.asc(), StockLot.created_at.asc()).limit(200).all()
+        lots = s.query(StockLot).order_by(
+            StockLot.best_before.is_(None), StockLot.best_before.asc(), StockLot.created_at.asc()
+        ).limit(200).all()
         for lot in lots:
             with st.expander(f"Lote #{lot.id} — {lot.ingredient.name if lot.ingredient else '?'} • Restante {lot.qty_remaining} {lot.unit} • Validade {lot.best_before or '-'}"):
                 qty_adj = st.number_input("Descartar quantidade", min_value=0.0, step=0.1, key=f"dsc_{lot.id}")
@@ -850,63 +868,77 @@ else:
                             toast_ok(f"Descartado {taken} {lot.unit}.")
                             st.rerun()
 
-            st.markdown("### Sugestões de compra")
-            with st.expander("Gerar por faltas em pedidos abertos"):
-                d1, d2 = st.columns(2)
-                day_from = d1.date_input("De", value=dt.date.today())
-                day_to = d2.date_input("Até", value=dt.date.today()+dt.timedelta(days=7))
-                if st.button("Gerar sugestão"):
-                    # calcula necessidade total de ingredientes para pedidos no intervalo
-                    open_orders = s.query(Order).filter(
-                        Order.status.notin_(["CANCELADO","ENTREGUE"]),
-                        Order.delivery_date >= day_from, Order.delivery_date <= day_to
-                    ).all()
-                    need: Dict[int,float] = {}
-                    for o in open_orders:
-                        from db import required_ingredients_for_order
-                        req = required_ingredients_for_order(s, o)
-                        for k,v in req.items():
-                            need[k] = need.get(k,0.0)+v
-                    # subtrai disponível
-                    suggest = []
-                    for ing_id, req_qty in need.items():
-                        avail = s.query(StockLot).with_entities(StockLot.qty_remaining).filter(
-                            StockLot.ingredient_id==ing_id, StockLot.qty_remaining>0
-                        ).all()
-                        have = sum(x[0] for x in avail)
-                        miss = req_qty - have
-                        if miss > 0:
-                            suggest.append((ing_id, miss))
-                    if not suggest:
-                        toast_ok("Sem faltas. Nada sugerido.")
-                    else:
-                        mp = ManualPurchase(is_suggestion=True, title=f"Sugestão {day_from}..{day_to}", total=0.0)
-                        s.add(mp); s.flush()
-                        for ing_id, miss in suggest:
-                            ing = s.get(Ingredient, ing_id)
-                            s.add(ManualPurchaseItem(purchase_id=mp.id, ingredient_id=ing_id, qty=miss, unit=ing.unit, price=0.0))
-                        s.commit()
-                        toast_ok(f"Sugestão criada #{mp.id}.")
-                        st.rerun()
+        # ---------------- Sugestões de compra ----------------
+        st.markdown("### Sugestões de compra")
 
-            # Listagem de sugestões (histórico)
-            sugg = s.query(ManualPurchase).filter(ManualPurchase.is_suggestion==True).order_by(
-                ManualPurchase.created_at.desc()
-            ).limit(20).all()
-            for mp in sugg:
-                with st.expander(f"Sugestão #{mp.id} — {mp.title or mp.created_at.date()}"):
-                    items = s.query(ManualPurchaseItem).filter(ManualPurchaseItem.purchase_id==mp.id).all()
-                    rows = []
-                    for it in items:
-                        ing = s.get(Ingredient, it.ingredient_id)
-                        rows.append({"Ingrediente": ing.name if ing else "?", "Qtd": it.qty, "Un": it.unit})
-                    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-                    if st.button("Baixar CSV", key=f"csv_{mp.id}"):
-                        import pandas as pd
-                        csv = pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
-                        st.download_button("Download CSV", csv, file_name=f"sugestao_{mp.id}.csv", mime="text/csv", key=f"dl_{mp.id}")
-                    if not mp.completed_at and st.button("Marcar como concluída", key=f"done_{mp.id}"):
-                        mp.completed_at = dt.datetime.utcnow(); s.commit(); toast_ok("Marcada como concluída."); st.rerun()
+        # Failsafe: garantir colunas mesmo se cache pular init_db()
+        from sqlalchemy import inspect as _insp, text as _text
+        _eng = s.get_bind()
+        try:
+            _cols = [c["name"] for c in _insp(_eng).get_columns("manual_purchase")]
+        except Exception:
+            _cols = []
+        if "is_suggestion" not in _cols:
+            with _eng.begin() as _conn:
+                _conn.execute(_text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS is_suggestion BOOLEAN DEFAULT FALSE'))
+                _conn.execute(_text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS title VARCHAR(200)'))
+                _conn.execute(_text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP'))
+
+        with st.expander("Gerar por faltas em pedidos abertos"):
+            d1, d2 = st.columns(2)
+            day_from = d1.date_input("De", value=dt.date.today())
+            day_to = d2.date_input("Até", value=dt.date.today() + dt.timedelta(days=7))
+            if st.button("Gerar sugestão"):
+                # calcula necessidade total de ingredientes para pedidos no intervalo
+                open_orders = s.query(Order).filter(
+                    Order.status.notin_(["CANCELADO", "ENTREGUE"]),
+                    Order.delivery_date >= day_from, Order.delivery_date <= day_to
+                ).all()
+                need: Dict[int, float] = {}
+                for o in open_orders:
+                    from db import required_ingredients_for_order
+                    req = required_ingredients_for_order(s, o)
+                    for k, v in req.items():
+                        need[k] = need.get(k, 0.0) + v
+                # subtrai disponível
+                suggest = []
+                for ing_id, req_qty in need.items():
+                    avail = s.query(StockLot).with_entities(StockLot.qty_remaining).filter(
+                        StockLot.ingredient_id == ing_id, StockLot.qty_remaining > 0
+                    ).all()
+                    have = sum(x[0] for x in avail)
+                    miss = req_qty - have
+                    if miss > 0:
+                        suggest.append((ing_id, miss))
+                if not suggest:
+                    toast_ok("Sem faltas. Nada sugerido.")
+                else:
+                    mp = ManualPurchase(is_suggestion=True, title=f"Sugestão {day_from}..{day_to}", total=0.0)
+                    s.add(mp); s.flush()
+                    for ing_id, miss in suggest:
+                        ing = s.get(Ingredient, ing_id)
+                        s.add(ManualPurchaseItem(purchase_id=mp.id, ingredient_id=ing_id, qty=miss, unit=ing.unit, price=0.0))
+                    s.commit()
+                    toast_ok(f"Sugestão criada #{mp.id}.")
+                    st.rerun()
+
+        # Listagem de sugestões (histórico)
+        sugg = s.query(ManualPurchase).filter(ManualPurchase.is_suggestion == True).order_by(
+            ManualPurchase.created_at.desc()
+        ).limit(20).all()
+        for mp in sugg:
+            with st.expander(f"Sugestão #{mp.id} — {mp.title or mp.created_at.date()}"):
+                items = s.query(ManualPurchaseItem).filter(ManualPurchaseItem.purchase_id == mp.id).all()
+                rows = []
+                for it in items:
+                    ing = s.get(Ingredient, it.ingredient_id)
+                    rows.append({"Ingrediente": ing.name if ing else "?", "Qtd": it.qty, "Un": it.unit})
+                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                if st.button("Baixar CSV", key=f"csv_{mp.id}"):
+                    csv = pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
+                    st.download_button("Download CSV", csv, file_name=f"sugestao_{mp.id}.csv", mime="text/csv", key=f"dl_{mp.id}")
+                if not mp.completed_at and st.button("Marcar como concluída", key=f"done_{mp.id}"):
+                    mp.completed_at = dt.datetime.utcnow(); s.commit(); toast_ok("Marcada como concluída."); st.rerun()
 
         if st.button("Descartar vencidos automaticamente"):
             if not can("stock.discard_expired"):
@@ -932,14 +964,14 @@ def page_import():
         return
     df = pd.read_csv(up)
     st.write("Prévia:", df.head())
-    mode = st.selectbox("Importar como", ["Ingredientes","Clientes","Produtos"])
+    mode = st.selectbox("Importar como", ["Ingredientes", "Clientes", "Produtos"])
     if st.button("Importar"):
         with SessionLocal() as s:
             if mode == "Ingredientes":
                 for _, r in df.iterrows():
                     name = str(r.get("name") or r.get("Nome") or "").strip()
                     unit = str(r.get("unit") or r.get("Unidade") or "g").strip()
-                    if name and not s.query(Ingredient).filter(Ingredient.name==name).first():
+                    if name and not s.query(Ingredient).filter(Ingredient.name == name).first():
                         s.add(Ingredient(name=name, unit=unit, is_active=True))
                 s.commit()
             elif mode == "Clientes":
@@ -947,13 +979,13 @@ def page_import():
                     name = str(r.get("name") or r.get("Nome") or "").strip()
                     phone = str(r.get("phone") or r.get("Telefone") or "")
                     address = str(r.get("address") or r.get("Endereço") or "")
-                    if name and not s.query(Client).filter(Client.name==name).first():
+                    if name and not s.query(Client).filter(Client.name == name).first():
                         s.add(Client(name=name, phone=phone, address=address, is_active=True))
                 s.commit()
             else:  # Produtos
                 for _, r in df.iterrows():
                     name = str(r.get("name") or r.get("Nome") or "").strip()
-                    if name and not s.query(Product).filter(Product.name==name).first():
+                    if name and not s.query(Product).filter(Product.name == name).first():
                         s.add(Product(name=name, is_active=True))
                 s.commit()
         toast_ok("Importação concluída.")
@@ -976,9 +1008,8 @@ def page_discard():
             if not can("stock.discard"):
                 toast_err("Sem permissão.")
             else:
-                # descarta da fila FIFO (como perda)
                 from db import consume_fifo
-                consumed, missing = consume_fifo(s, ing[0], qty, ing[2], order_id=None, note=f"DESCARTE: {reason}")
+                consumed, _ = consume_fifo(s, ing[0], qty, ing[2], order_id=None, note=f"DESCARTE: {reason}")
                 s.add(LossEvent(ingredient_id=ing[0], lot_id=None, qty=consumed, reason=reason))
                 s.commit()
                 toast_ok(f"Descartado {consumed} {ing[2]}.")
@@ -1009,7 +1040,7 @@ def page_settings():
                 else:
                     try:
                         arr = json.loads(stages_txt)
-                        assert isinstance(arr, list) and len(arr)>0
+                        assert isinstance(arr, list) and len(arr) > 0
                     except Exception:
                         toast_err("JSON inválido para estágios. Usando padrão.")
                         arr = DEFAULT_KANBAN_STAGES
@@ -1041,7 +1072,7 @@ def page_users():
                 elif not username or not pwd:
                     toast_err("Preencha usuário e senha.")
                 else:
-                    if s.query(User).filter(User.username==username).first():
+                    if s.query(User).filter(User.username == username).first():
                         toast_err("Usuário já existe.")
                     else:
                         phash = bcrypt.hashpw(pwd.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -1049,6 +1080,7 @@ def page_users():
                         s.add(u); s.commit()
                         toast_ok("Usuário criado.")
                         st.rerun()
+
         st.markdown("### Papéis e permissões")
         roles = s.query(Role).order_by(Role.name.asc()).all()
         colL, colR = st.columns(2)
@@ -1062,7 +1094,7 @@ def page_users():
                         toast_err("Sem permissão.")
                     elif not rname:
                         toast_err("Informe o nome.")
-                    elif s.query(Role).filter(Role.name==rname).first():
+                    elif s.query(Role).filter(Role.name == rname).first():
                         toast_err("Já existe.")
                     else:
                         s.add(Role(name=rname, permissions_json=json.dumps([]))); s.commit()
@@ -1076,7 +1108,6 @@ def page_users():
                     curr = set(json.loads(role_sel.permissions_json or "[]"))
                 except Exception:
                     curr = set()
-                # Mostrar ALL_PERMISSIONS como checkboxes agrupados por prefixo
                 groups: Dict[str, List[str]] = {}
                 for p in sorted(ALL_PERMISSIONS):
                     g = p.split(".")[0]
@@ -1087,7 +1118,7 @@ def page_users():
                     cols = st.columns(3)
                     for i, perm in enumerate(items):
                         checked = perm in curr
-                        newv = cols[i%3].checkbox(perm, value=checked, key=f"chk_{role_sel.id}_{perm}")
+                        newv = cols[i % 3].checkbox(perm, value=checked, key=f"chk_{role_sel.id}_{perm}")
                         if newv != checked:
                             changed = True
                             if newv:
@@ -1101,6 +1132,7 @@ def page_users():
                         role_sel.permissions_json = json.dumps(sorted(list(curr)))
                         s.commit()
                         toast_ok("Permissões salvas.")
+
         st.markdown("### Atribuir/Remover papéis")
         users = s.query(User).order_by(User.username.asc()).all()
         u_sel = st.selectbox("Usuário", users, format_func=lambda u: u.username if u else "-")
@@ -1116,7 +1148,7 @@ def page_users():
                     if r_sel not in u_sel.roles:
                         u_sel.roles.append(r_sel); s.commit(); toast_ok("Papel atribuído.")
                         if "user" in st.session_state and st.session_state["user"]["id"] == u_sel.id:
-                            st.session_state["perms"] = get_user_permissions(s, u_sel)  # atualizar
+                            st.session_state["perms"] = get_user_permissions(s, u_sel)
             if cols[1].button("Remover"):
                 if not can("rbac.assign_roles"):
                     toast_err("Sem permissão.")
