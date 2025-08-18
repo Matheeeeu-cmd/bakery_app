@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple, Union, Set
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey,
-    Text, Date, UniqueConstraint, event, inspect, Table
+    Text, Date, UniqueConstraint, event, inspect, Table, text  # <- text aqui
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
 
@@ -277,9 +277,17 @@ class ManualPurchase(Base):
     id = Column(Integer, primary_key=True)
     supplier_id = Column(Integer, ForeignKey("supplier.id", ondelete="SET NULL"))
     total = Column(Float, default=0.0)
+
+    # >>> novos campos usados no app <<<
+    is_suggestion = Column(Boolean, default=False, nullable=False)  # lista gerada por “Sugestões de compra”
+    title = Column(String(200))                                     # título descritivo da sugestão/lista
+    completed_at = Column(DateTime)                                 # quando a lista/sugestão foi concluída
+    # <<<
+
     created_at = Column(DateTime, default=dt.datetime.utcnow)
-    supplier = relationship("Supplier")
-    items = relationship("ManualPurchaseItem", back_populates="purchase", cascade="all, delete")
+
+    # (opcional) relacionamento para facilitar consultas
+    supplier = relationship("Supplier", backref="manual_purchases")
 
 class ManualPurchaseItem(Base):
     __tablename__ = "manual_purchase_item"
@@ -414,6 +422,23 @@ def run_safe_migrations(engine):
             if not column_exists(engine, "config", "fifo_stage"):
                 try:
                     conn.execute(text('ALTER TABLE "config" ADD COLUMN fifo_stage VARCHAR(64)'))
+                except Exception:
+                    pass
+        # ------- Campos extras para ManualPurchase (usados por Sugestões de compra) -------
+        if "manual_purchase" in tables:
+            if not column_exists(engine, "manual_purchase", "is_suggestion"):
+                try:
+                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN is_suggestion BOOLEAN DEFAULT 0'))
+                except Exception:
+                    pass
+            if not column_exists(engine, "manual_purchase", "title"):
+                try:
+                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN title VARCHAR(200)'))
+                except Exception:
+                    pass
+            if not column_exists(engine, "manual_purchase", "completed_at"):
+                try:
+                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN completed_at TIMESTAMP'))
                 except Exception:
                     pass
 
