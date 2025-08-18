@@ -426,15 +426,9 @@ def get_or_create_default_config(session: Session) -> Config:
 # Migrations idempotentes simples
 # -----------------------
 from sqlalchemy import text
-
-def column_exists(engine, table: str, column: str) -> bool:
-    insp = inspect(engine)
-    try:
-        cols = [c["name"] for c in insp.get_columns(table)]
-    except Exception:
-        return False
-    return column in cols
-
+# -----------------------
+# Migrations idempotentes simples
+# -----------------------
 def column_exists(engine, table_name: str, column_name: str) -> bool:
     insp = inspect(engine)
     try:
@@ -444,56 +438,38 @@ def column_exists(engine, table_name: str, column_name: str) -> bool:
     return any(c.get("name") == column_name for c in cols)
 
 def run_safe_migrations(engine):
-    insp = inspect(engine)
-    tables = set(insp.get_table_names())
-
+    """
+    Executa ALTER TABLE com IF NOT EXISTS para criar colunas faltantes.
+    É seguro rodar várias vezes.
+    """
     with engine.begin() as conn:
-        # ------- Campos extras para ManualPurchase (usados por "Sugestões de compra") -------
+        insp = inspect(engine)
+        tables = set(insp.get_table_names())
+
+        # ------- ManualPurchase: colunas usadas por "Sugestões de compra" -------
         if "manual_purchase" in tables:
-            if not column_exists(engine, "manual_purchase", "is_suggestion"):
+            stmts = [
+                'ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS is_suggestion BOOLEAN DEFAULT 0',
+                'ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS title VARCHAR(200)',
+                'ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP',
+            ]
+            for stmt in stmts:
                 try:
-                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN is_suggestion BOOLEAN DEFAULT 0'))
+                    conn.execute(text(stmt))
                 except Exception:
-                    pass
-            if not column_exists(engine, "manual_purchase", "title"):
-                try:
-                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN title VARCHAR(200)'))
-                except Exception:
-                    pass
-            if not column_exists(engine, "manual_purchase", "completed_at"):
-                try:
-                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN completed_at TIMESTAMP'))
-                except Exception:
-                    pass
-        # garantir coluna kanban_stages_json e fifo_stage
+                    pass  # idempotente
+
+        # ------- Config: kanban_stages_json e fifo_stage -------
         if "config" in tables:
-            if not column_exists(engine, "config", "kanban_stages_json"):
-                try:
-                    conn.execute(text('ALTER TABLE "config" ADD COLUMN kanban_stages_json TEXT'))
-                except Exception:
-                    pass
-            if not column_exists(engine, "config", "fifo_stage"):
-                try:
-                    conn.execute(text('ALTER TABLE "config" ADD COLUMN fifo_stage VARCHAR(64)'))
-                except Exception:
-                    pass
-        # ------- Campos extras para ManualPurchase (usados por Sugestões de compra) -------
-        if "manual_purchase" in tables:
-            if not column_exists(engine, "manual_purchase", "is_suggestion"):
-                try:
-                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN is_suggestion BOOLEAN DEFAULT 0'))
-                except Exception:
-                    pass
-            if not column_exists(engine, "manual_purchase", "title"):
-                try:
-                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN title VARCHAR(200)'))
-                except Exception:
-                    pass
-            if not column_exists(engine, "manual_purchase", "completed_at"):
-                try:
-                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN completed_at TIMESTAMP'))
-                except Exception:
-                    pass
+            try:
+                conn.execute(text('ALTER TABLE "config" ADD COLUMN IF NOT EXISTS kanban_stages_json TEXT'))
+            except Exception:
+                pass
+            try:
+                conn.execute(text('ALTER TABLE "config" ADD COLUMN IF NOT EXISTS fifo_stage VARCHAR(64)'))
+            except Exception:
+                pass
+
 
 # -----------------------
 # Helpers de Estoque FIFO e custos
@@ -675,7 +651,7 @@ def init_db(engine):
     # roda migrações idempotentes (add coluna se faltar, etc.)
     run_safe_migrations(engine)
 
-    # seed básico (roles e config)
+    # seeds básicos
     SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
     with SessionLocal() as session:
         seed_default_roles(session)
