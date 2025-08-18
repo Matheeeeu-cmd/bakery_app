@@ -421,7 +421,7 @@ def run_safe_migrations(engine):
 
         # ManualPurchase -> colunas usadas por "Sugestões de compra"
         if "manual_purchase" in tables:
-            conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS is_suggestion BOOLEAN DEFAULT 0'))
+            conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS is_suggestion BOOLEAN DEFAULT FALSE'))
             conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS title VARCHAR(200)'))
             conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP'))
 
