@@ -17,6 +17,7 @@ from db import (
     ManualPurchase, ManualPurchaseItem,
     get_or_create_default_config, get_user_permissions, ALL_PERMISSIONS,
     estimate_product_unit_cost, consume_fifo_for_order, ingredient_shortages, DEFAULT_KANBAN_STAGES
+create_login_token, get_user_by_token, delete_token
 )
 
 # -----------------------
@@ -30,6 +31,20 @@ def get_engine_and_sessionmaker():
     return engine, SessionLocal
 
 engine, SessionLocal = get_engine_and_sessionmaker()
+
+# Auto-login via token na URL
+def try_auto_login_from_token():
+    params = st.query_params
+    tok = params.get("token", [None])
+    tok = tok[0] if isinstance(tok, list) else tok
+    if tok and "user" not in st.session_state:
+        with SessionLocal() as s:
+            u = get_user_by_token(s, tok)
+            if u and u.is_active:
+                st.session_state["user"] = {"id": u.id, "username": u.username}
+                st.session_state["perms"] = get_user_permissions(s, u)
+
+try_auto_login_from_token()
 
 # -----------------------
 # Utils UI
@@ -136,9 +151,15 @@ def login_sidebar():
         u = st.session_state["user"]
         st.sidebar.markdown(f"**Logado como:** `{u['username']}`")
         if st.sidebar.button("Sair"):
+            # apaga token da URL e do banco
+            tok = st.query_params.get("token", [None])
+            tok = tok[0] if isinstance(tok, list) else tok
+            if tok:
+                with SessionLocal() as s:
+                    delete_token(s, tok)
+            st.query_params.clear()
             for k in ["user","perms"]:
-                if k in st.session_state:
-                    del st.session_state[k]
+                st.session_state.pop(k, None)
             st.rerun()
         return
 
@@ -154,6 +175,12 @@ def login_sidebar():
                     return
                 st.session_state["user"] = {"id": u.id, "username": u.username}
                 st.session_state["perms"] = get_user_permissions(s, u)
+
+                # >>> adicionados conforme solicitado <<<
+                tok = create_login_token(s, u.id)
+                st.query_params["token"] = tok
+                # >>> fim adição <<<
+
                 toast_ok("Login efetuado.")
                 st.rerun()
 
@@ -208,11 +235,28 @@ def page_dashboard():
         open_orders = s.query(Order).filter(Order.status != "ENTREGUE").count()
         today = dt.date.today()
         today_orders = s.query(Order).filter(Order.delivery_date == today).count()
-    cols = st.columns(3)
-    cols[0].metric("Pedidos (total)", total_orders)
-    cols[1].metric("Pedidos em aberto", open_orders)
-    cols[2].metric("Para hoje", today_orders)
-    st.info("Use o menu lateral para navegar. Pedidos e Kanban são o coração do fluxo.")
+
+        # ganhos (faturamento) = pedidos ENTREGUE
+        revenue = s.query(Order).filter(Order.status=="ENTREGUE").with_entities(
+            (Order.total).label("rev")
+        ).all()
+        revenue_sum = sum(x.rev or 0.0 for x in revenue)
+
+        # perdas (custo perdido) pelos movimentos LOSS
+        loss_moves = s.query(StockMove).filter(StockMove.move_type=="LOSS").all()
+        loss_sum = sum((m.cost or 0.0) for m in loss_moves)
+
+        # custo estimado produzido = soma de cost OUT
+        out_moves = s.query(StockMove).filter(StockMove.move_type=="OUT").all()
+        cost_out_sum = sum((m.cost or 0.0) for m in out_moves)
+
+    c = st.columns(4)
+    c[0].metric("Pedidos (total)", total_orders)
+    c[1].metric("Aberto", open_orders)
+    c[2].metric("Hoje", today_orders)
+    c[3].metric("Faturado (entregue)", fmt_money(revenue_sum))
+    st.metric("Perdas (descartes)", fmt_money(loss_sum))
+    st.metric("Custo consumido (estimado)", fmt_money(cost_out_sum))
 
 def page_ingredients():
     st.subheader("Ingredientes")
@@ -296,21 +340,27 @@ def page_ingredients():
             rows = [{"Lote":lid, "Ingrediente": id_to_ing.get(iid,"?"), "Qtd restante": qty, "Un":u, "Validade": bb} for lid, iid, qty, u, bb in lots]
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
         with tab3:
-            st.markdown("### Preços — incluir registro")
+            st.markdown("### Preços — incluir/consultar")
             ing_opts = cached_ingredients()
             if ing_opts:
                 ing_name_to_id = {n: i for i, n, _ in ing_opts}
-                with st.form("price_form"):
-                    sel = st.selectbox("Ingrediente", [n for _, n, _ in ing_opts])
-                    price = st.number_input("Preço (por unidade)", min_value=0.0, step=0.01)
-                    ok = st.form_submit_button("Salvar preço")
-                    if ok:
-                        s.add(IngredientPrice(ingredient_id=ing_name_to_id[sel], price=price))
-                        s.commit()
-                        toast_ok("Preço registrado.")
-            prices = s.query(IngredientPrice).order_by(IngredientPrice.created_at.desc()).limit(200).all()
-            rows = [{"Ingrediente": p.ingredient.name if p.ingredient else "?", "Preço": p.price, "Quando": p.created_at} for p in prices]
+                c1, c2 = st.columns(2)
+        sel_name = c1.selectbox("Ingrediente", [n for _, n, _ in ing_opts], key="price_hist_ing")
+        price = c2.number_input("Preço (por unidade)", min_value=0.0, step=0.01, key="price_hist_val")
+        if st.button("Salvar preço", key="btn_price_save"):
+            with SessionLocal() as s:
+                s.add(IngredientPrice(ingredient_id=ing_map[sel_name], price=price))
+                s.commit()
+                toast_ok("Preço registrado.")
+
+        with SessionLocal() as s:
+            q = s.query(IngredientPrice).join(Ingredient, IngredientPrice.ingredient_id == Ingredient.id)
+            q = q.filter(Ingredient.name == sel_name).order_by(IngredientPrice.created_at.desc()).limit(200)
+            prices = q.all()
+            rows = [{"Quando": p.created_at, "Preço": p.price} for p in prices]
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    else:
+        st.info("Cadastre ingredientes antes.")
 
 def page_recipes():
     st.subheader("Receitas")
@@ -404,6 +454,7 @@ def page_products():
                         cached_products.clear()
                         toast_ok("Produto criado.")
                         st.rerun()
+                        
         st.markdown("### Lista / Preço sugerido")
         cfg = get_or_create_default_config(s)
         data = []
@@ -414,6 +465,28 @@ def page_products():
             data.append([p.id, p.name, p.recipe.name if p.recipe else "-", fmt_money(cost), fmt_money(suggested), fmt_money(price_show), p.is_active])
         df = pd.DataFrame(data, columns=["ID","Nome","Receita","Custo unitário","Sugestão","Preço exibido","Ativo"])
         st.dataframe(df, hide_index=True, use_container_width=True)
+        st.markdown("### Editar produto")
+        allp = s.query(Product).order_by(Product.name.asc()).all()
+        psel = st.selectbox("Selecione", allp, format_func=lambda p: p.name if p else "-")
+        if psel:
+            c1, c2, c3, c4 = st.columns([3,2,1,1])
+            new_name = c1.text_input("Nome", value=psel.name, key=f"pname_{psel.id}")
+            recs = s.query(Recipe).order_by(Recipe.name.asc()).all()
+            new_rec = c2.selectbox("Receita", [None] + recs, index=(0 if not psel.recipe else 1+recs.index(psel.recipe)), format_func=lambda r: (r.name if r else "-"), key=f"prec_{psel.id}")
+            new_price_manual = c3.number_input("Preço manual", min_value=0.0, value=float(psel.price_manual or 0.0), step=0.01, key=f"pprice_{psel.id}")
+            new_active = c4.checkbox("Ativo", value=bool(psel.is_active), key=f"pactive_{psel.id}")
+            if st.button("Salvar produto", key=f"psave_{psel.id}"):
+                if not can("product.update"):
+                    toast_err("Sem permissão.")
+                else:
+                    psel.name = new_name.strip() or psel.name
+                    psel.recipe_id = new_rec.id if new_rec else None
+                    psel.price_manual = new_price_manual if new_price_manual > 0 else None
+                    psel.is_active = new_active
+                    s.commit()
+                    cached_products.clear()
+                    toast_ok("Produto atualizado.")
+                    st.rerun()
 
 def page_clients():
     st.subheader("Clientes")
@@ -439,6 +512,31 @@ def page_clients():
                     cached_clients.clear()
                     toast_ok("Cliente criado.")
                     st.rerun()
+
+        st.markdown("### Editar Cliente")
+        cs = s.query(Client).order_by(Client.name.asc()).all()
+        sel = st.selectbox("Selecione", cs, format_func=lambda c: c.name if c else "-")
+        if sel:
+            c1, c2 = st.columns([2,1])
+            new_name = c1.text_input("Nome", value=sel.name, key=f"cli_name_{sel.id}")
+            new_phone = c2.text_input("Telefone", value=sel.phone or "", key=f"cli_phone_{sel.id}")
+            new_addr = st.text_input("Endereço", value=sel.address or "", key=f"cli_addr_{sel.id}")
+            new_notes = st.text_area("Notas", value=sel.notes or "", key=f"cli_notes_{sel.id}")
+            new_active = st.checkbox("Ativo", value=bool(sel.is_active), key=f"cli_active_{sel.id}")
+            if st.button("Salvar alterações", key=f"cli_save_{sel.id}"):
+                if not can("client.update"):
+                    toast_err("Sem permissão.")
+                else:
+                    sel.name = new_name.strip() or sel.name
+                    sel.phone = new_phone
+                    sel.address = new_addr
+                    sel.notes = new_notes
+                    sel.is_active = new_active
+                    s.commit()
+                    cached_clients.clear()
+                    toast_ok("Cliente atualizado.")
+                    st.rerun()
+
         st.markdown("### Busca")
         q = st.text_input("Pesquisar por nome")
         query = s.query(Client)
@@ -634,46 +732,78 @@ def page_stock():
         st.info("Sem permissão.")
         return
     with SessionLocal() as s:
-        st.markdown("### Compra manual")
-        ing_opts = cached_ingredients()
-        if not ing_opts:
-            st.info("Cadastre ingredientes primeiro.")
-            return
-        with st.form("purchase_form"):
-            sup_name = st.text_input("Fornecedor (texto livre)")
-            lines = st.number_input("Itens nesta compra", min_value=1, max_value=20, value=1)
-            entries = []
-            for i in range(int(lines)):
-                cols = st.columns((3,1,1,1,2))
-                sel = cols[0].selectbox(f"Ingrediente #{i+1}", ing_opts, key=f"p_ing_{i}", format_func=lambda t: t[1])
-                qty = cols[1].number_input("Qtd", min_value=0.0, step=0.1, key=f"p_qty_{i}")
-                unit = cols[2].selectbox("Un", ["g","un"], key=f"p_unit_{i}")
-                price = cols[3].number_input("Preço/un", min_value=0.0, step=0.01, key=f"p_price_{i}")
-                bb = cols[4].date_input("Validade", value=None, key=f"p_bb_{i}")
-                entries.append((sel, qty, unit, price, bb))
-            ok = st.form_submit_button("Registrar compra")
-            if ok:
-                if not can("stock.create_purchase"):
-                    toast_err("Sem permissão.")
-                else:
-                    sup = None
-                    if sup_name:
-                        sup = s.query(Supplier).filter(Supplier.name==sup_name).first()
-                        if not sup:
-                            sup = Supplier(name=sup_name); s.add(sup); s.flush()
-                    total = 0.0
-                    p = ManualPurchase(supplier_id=(sup.id if sup else None), total=0.0)
-                    s.add(p); s.flush()
-                    from db import create_lot
-                    for (sel, qty, unit, price, bb) in entries:
-                        ing_id = int(sel[0])
-                        s.add(ManualPurchaseItem(purchase_id=p.id, ingredient_id=ing_id, qty=qty, unit=unit, price=price))
-                        create_lot(s, ing_id, qty, unit, price, bb, note=f"Compra #{p.id}")
-                        total += qty*price
-                    p.total = total
-                    s.commit()
-                    toast_ok(f"Compra registrada (total {fmt_money(total)}).")
+        st.markdown("### Fornecedores")
+        with st.form("sup_new"):
+            sname = st.text_input("Nome do fornecedor")
+            scontact = st.text_input("Contato")
+            if st.form_submit_button("Criar fornecedor"):
+                if sname:
+                    s.add(Supplier(name=sname, contact=scontact)); s.commit()
+                    toast_ok("Fornecedor criado.")
                     st.rerun()
+        sup_all = s.query(Supplier).order_by(Supplier.name.asc()).all()
+        if sup_all:
+            sup_sel = st.selectbox("Editar fornecedor", [None]+sup_all, format_func=lambda x: x.name if x else "-")
+            if sup_sel:
+                n1, n2 = st.columns(2)
+                nname = n1.text_input("Nome", value=sup_sel.name or "", key=f"supn_{sup_sel.id}")
+                ncont = n2.text_input("Contato", value=sup_sel.contact or "", key=f"supc_{sup_sel.id}")
+                if st.button("Salvar fornecedor", key=f"supsave_{sup_sel.id}"):
+                    sup_sel.name = nname.strip() or sup_sel.name
+                    sup_sel.contact = ncont
+                    s.commit()
+                    toast_ok("Fornecedor atualizado.")
+                    st.rerun()
+    
+            st.markdown("### Compra manual")
+            ing_opts = cached_ingredients()
+            if not ing_opts:
+                st.info("Cadastre ingredientes primeiro.")
+                return
+            with SessionLocal() as s:
+                with st.form("purchase_form"):
+                    # Fornecedor por dropdown (sem texto livre)
+                    sup_list = s.query(Supplier).order_by(Supplier.name.asc()).all()
+                    sup = st.selectbox("Fornecedor", [None] + sup_list, format_func=lambda x: x.name if x else "-")
+
+                    lines = st.number_input("Itens nesta compra", min_value=1, max_value=20, value=1)
+                    entries = []
+                    for i in range(int(lines)):
+                        cols = st.columns((3, 1, 1, 1, 2))
+                        sel = cols[0].selectbox(f"Ingrediente #{i+1}", ing_opts, key=f"p_ing_{i}", format_func=lambda t: t[1])
+                        qty = cols[1].number_input("Qtd", min_value=0.0, step=0.1, key=f"p_qty_{i}")
+                        unit = cols[2].selectbox("Un", ["g", "un"], key=f"p_unit_{i}")
+                        price = cols[3].number_input("Preço/un", min_value=0.0, step=0.01, key=f"p_price_{i}")
+                        bb = cols[4].date_input("Validade", key=f"p_bb_{i}")
+                        entries.append((sel, qty, unit, price, bb))
+
+                    ok = st.form_submit_button("Registrar compra")
+                    if ok:
+                        if not can("stock.create_purchase"):
+                              toast_err("Sem permissão.")
+                        else:
+                            total = 0.0
+                            p = ManualPurchase(supplier_id=(sup.id if sup else None), total=0.0)
+                            s.add(p); s.flush()
+
+                             from db import create_lot
+                             for (sel, qty, unit, price, bb) in entries:
+                                ing_id = int(sel[0])
+                                s.add(ManualPurchaseItem(
+                                  purchase_id=p.id,
+                                ingredient_id=ing_id,
+                                qty=qty,
+                                unit=unit,
+                                price=price
+                            ))
+                            create_lot(s, ing_id, qty, unit, price, bb, note=f"Compra #{p.id}")
+                            total += (qty or 0.0) * (price or 0.0)
+
+                        p.total = total
+                        s.commit()
+                        toast_ok(f"Compra registrada (total {fmt_money(total)}).")
+                        st.rerun()
+                        
         st.markdown("### Ajustes / Vencidos")
         lots = s.query(StockLot).order_by(StockLot.best_before.is_(None), StockLot.best_before.asc(), StockLot.created_at.asc()).limit(200).all()
         for lot in lots:
@@ -689,6 +819,65 @@ def page_stock():
                             taken = discard_from_lot(s, lot.id, qty_adj, reason=reason)
                             toast_ok(f"Descartado {taken} {lot.unit}.")
                             st.rerun()
+
+            st.markdown("### Sugestões de compra")
+            with st.expander("Gerar por faltas em pedidos abertos"):
+                d1, d2 = st.columns(2)
+                day_from = d1.date_input("De", value=dt.date.today())
+                day_to = d2.date_input("Até", value=dt.date.today()+dt.timedelta(days=7))
+                if st.button("Gerar sugestão"):
+                    # calcula necessidade total de ingredientes para pedidos no intervalo
+                    open_orders = s.query(Order).filter(
+                        Order.status.notin_(["CANCELADO","ENTREGUE"]),
+                        Order.delivery_date >= day_from, Order.delivery_date <= day_to
+                    ).all()
+                    need: Dict[int,float] = {}
+                    for o in open_orders:
+                        from db import required_ingredients_for_order
+                        req = required_ingredients_for_order(s, o)
+                        for k,v in req.items():
+                            need[k] = need.get(k,0.0)+v
+                    # subtrai disponível
+                    suggest = []
+                    for ing_id, req_qty in need.items():
+                        avail = s.query(StockLot).with_entities(StockLot.qty_remaining).filter(
+                            StockLot.ingredient_id==ing_id, StockLot.qty_remaining>0
+                        ).all()
+                        have = sum(x[0] for x in avail)
+                        miss = req_qty - have
+                        if miss > 0:
+                            suggest.append((ing_id, miss))
+                    if not suggest:
+                        toast_ok("Sem faltas. Nada sugerido.")
+                    else:
+                        mp = ManualPurchase(is_suggestion=True, title=f"Sugestão {day_from}..{day_to}", total=0.0)
+                        s.add(mp); s.flush()
+                        for ing_id, miss in suggest:
+                            ing = s.get(Ingredient, ing_id)
+                            s.add(ManualPurchaseItem(purchase_id=mp.id, ingredient_id=ing_id, qty=miss, unit=ing.unit, price=0.0))
+                        s.commit()
+                        toast_ok(f"Sugestão criada #{mp.id}.")
+                        st.rerun()
+
+            # Listagem de sugestões (histórico)
+            sugg = s.query(ManualPurchase).filter(ManualPurchase.is_suggestion==True).order_by(
+                ManualPurchase.created_at.desc()
+            ).limit(20).all()
+            for mp in sugg:
+                with st.expander(f"Sugestão #{mp.id} — {mp.title or mp.created_at.date()}"):
+                    items = s.query(ManualPurchaseItem).filter(ManualPurchaseItem.purchase_id==mp.id).all()
+                    rows = []
+                    for it in items:
+                        ing = s.get(Ingredient, it.ingredient_id)
+                        rows.append({"Ingrediente": ing.name if ing else "?", "Qtd": it.qty, "Un": it.unit})
+                    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                    if st.button("Baixar CSV", key=f"csv_{mp.id}"):
+                        import pandas as pd
+                        csv = pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
+                        st.download_button("Download CSV", csv, file_name=f"sugestao_{mp.id}.csv", mime="text/csv", key=f"dl_{mp.id}")
+                    if not mp.completed_at and st.button("Marcar como concluída", key=f"done_{mp.id}"):
+                        mp.completed_at = dt.datetime.utcnow(); s.commit(); toast_ok("Marcada como concluída."); st.rerun()
+
         if st.button("Descartar vencidos automaticamente"):
             if not can("stock.discard_expired"):
                 toast_err("Sem permissão.")
@@ -702,6 +891,11 @@ def page_import():
     if not can("page.import"):
         st.info("Sem permissão.")
         return
+    st.markdown("Modelos de CSV:")
+    st.download_button("Modelo Ingredientes", data="name,unit\nFarinha,g\nAçúcar,g\n", file_name="ingredientes_modelo.csv", mime="text/csv")
+    st.download_button("Modelo Clientes", data="name,phone,address\nCliente Exemplo,11999990000,Rua A 123\n", file_name="clientes_modelo.csv", mime="text/csv")
+    st.download_button("Modelo Produtos", data="name\nBolo de Chocolate\n", file_name="produtos_modelo.csv", mime="text/csv")
+
     up = st.file_uploader("CSV de Ingredientes/Clientes/Produtos (colunas mínimas variam)", type=["csv"])
     if not up:
         st.info("Envie um CSV para processar.")
