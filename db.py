@@ -140,7 +140,13 @@ class Recipe(Base):
     yield_qty = Column(Float, default=1.0)  # rendimento total da receita base
     unit = Column(String(20), default="un") # unidade do rendimento
     is_active = Column(Boolean, default=True)
-    items = relationship("RecipeItem", back_populates="recipe", cascade="all, delete")
+    # 👇 DIZER QUAL FK FAZ O VÍNCULO: RecipeItem.recipe_id
+    items = relationship(
+        "RecipeItem",
+        back_populates="recipe",
+        cascade="all, delete",
+        foreign_keys="RecipeItem.recipe_id",
+    )
 
 class RecipeItem(Base):
     __tablename__ = "recipe_item"
@@ -151,6 +157,8 @@ class RecipeItem(Base):
     sub_recipe_id = Column(Integer, ForeignKey("recipe.id", ondelete="SET NULL"))
     qty = Column(Float, nullable=False)
     item_type = Column(String(20), default="peso")  # "peso" ou "unidade"
+
+    # 👇 De novo, fixamos a FK correta do lado filho
     recipe = relationship("Recipe", back_populates="items", foreign_keys=[recipe_id])
     ingredient = relationship("Ingredient", foreign_keys=[ingredient_id])
     sub_recipe = relationship("Recipe", foreign_keys=[sub_recipe_id])
