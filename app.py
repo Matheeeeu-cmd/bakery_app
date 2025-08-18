@@ -242,6 +242,26 @@ def page_ingredients():
                             cached_ingredients.clear()
                             toast_ok("Ingrediente criado.")
                             st.rerun()
+            st.markdown("### Editar Ingrediente")
+            all_ings = s.query(Ingredient).order_by(Ingredient.name.asc()).all()
+            ing_sel = st.selectbox("Selecione para editar", all_ings, format_func=lambda i: i.name if i else "-")
+            if ing_sel:
+                c1, c2, c3 = st.columns([3,1,1])
+                new_name = c1.text_input("Nome", value=ing_sel.name, key=f"ing_edit_name_{ing_sel.id}")
+                new_unit = c2.selectbox("Unidade padrão", ["g","un"], index=(0 if (ing_sel.unit or "g")=="g" else 1), key=f"ing_edit_unit_{ing_sel.id}")
+                new_active = c3.checkbox("Ativo", value=bool(ing_sel.is_active), key=f"ing_edit_active_{ing_sel.id}")
+                if st.button("Salvar alterações", key=f"ing_edit_save_{ing_sel.id}"):
+                    if not can("ingredient.update"):
+                        toast_err("Sem permissão.")
+                    else:
+                        ing_sel.name = (new_name or ing_sel.name).strip()
+                        ing_sel.unit = new_unit
+                        ing_sel.is_active = new_active
+                        s.commit()
+                        cached_ingredients.clear()
+                        toast_ok("Ingrediente atualizado.")
+                        st.rerun()
+
             st.markdown("### Lista")
             ings = s.query(Ingredient).order_by(Ingredient.is_active.desc(), Ingredient.name.asc())\
                 .with_entities(Ingredient.id, Ingredient.name, Ingredient.unit, Ingredient.is_active).all()
@@ -268,7 +288,7 @@ def page_ingredients():
                         from db import create_lot
                         create_lot(s, ing_name_to_id[sel_name], qty, unit, price, best_before, note)
                         toast_ok("Lote criado.")
-                        st.experimental_rerun()
+                        st.rerun()
             st.markdown("### Estoque por Lotes (resumo)")
             lots = s.query(StockLot).order_by(StockLot.best_before.is_(None), StockLot.best_before.asc(), StockLot.created_at.asc())\
                 .with_entities(StockLot.id, StockLot.ingredient_id, StockLot.qty_remaining, StockLot.unit, StockLot.best_before).all()
@@ -474,7 +494,7 @@ def page_order_new():
                 o.total = _order_total(o.items)
                 s.commit()
                 toast_ok(f"Pedido #{o.id} criado com total {fmt_money(o.total)}.")
-                st.experimental_rerun()
+                st.rerun()
 
 def page_kanban():
     st.subheader("Kanban de Pedidos")
@@ -519,7 +539,7 @@ def page_kanban():
                                 o.paid = not o.paid
                                 s.commit()
                                 toast_ok("Status de pagamento atualizado.")
-                                st.experimental_rerun()
+                                st.rerun()
                             else:
                                 toast_err("Sem permissão.")
                         # Mensagens
@@ -552,7 +572,7 @@ def page_kanban():
                                             if faltantes:
                                                 st.warning("Consumo aplicado com faltas em alguns ingredientes.")
                                             toast_ok("Estoque consumido (FIFO).")
-                                        st.experimental_rerun()
+                                        st.rerun()
                                     else:
                                         toast_err("Sem permissão.")
                         # Cancelar
@@ -566,7 +586,7 @@ def page_kanban():
                                     o.canceled_reason = just or "Sem justificativa."
                                     s.commit()
                                     toast_ok("Pedido cancelado.")
-                                    st.experimental_rerun()
+                                    st.rerun()
 
 # -----------------------
 # Páginas — Pós-venda, Calendário, Compras & Estoque, Importação, Descarte & Vencidos,
@@ -595,7 +615,7 @@ def page_postsale():
                     o.pos_stage = nxt
                     s.commit()
                     toast_ok("Etapa de pós-venda atualizada.")
-                    st.experimental_rerun()
+                    st.rerun()
 
 def page_calendar():
     st.subheader("Calendário de Entregas (listagem)")
@@ -653,7 +673,7 @@ def page_stock():
                     p.total = total
                     s.commit()
                     toast_ok(f"Compra registrada (total {fmt_money(total)}).")
-                    st.experimental_rerun()
+                    st.rerun()
         st.markdown("### Ajustes / Vencidos")
         lots = s.query(StockLot).order_by(StockLot.best_before.is_(None), StockLot.best_before.asc(), StockLot.created_at.asc()).limit(200).all()
         for lot in lots:
@@ -668,7 +688,7 @@ def page_stock():
                             from db import discard_from_lot
                             taken = discard_from_lot(s, lot.id, qty_adj, reason=reason)
                             toast_ok(f"Descartado {taken} {lot.unit}.")
-                            st.experimental_rerun()
+                            st.rerun()
         if st.button("Descartar vencidos automaticamente"):
             if not can("stock.discard_expired"):
                 toast_err("Sem permissão.")
@@ -776,7 +796,7 @@ def page_settings():
                     cfg.fifo_stage = fifo_stage or "EM_PRODUCAO"
                     s.commit()
                     toast_ok("Configurações salvas.")
-                    st.experimental_rerun()
+                    st.rerun()
 
 def page_users():
     st.subheader("Usuários & Acessos")
@@ -823,7 +843,7 @@ def page_users():
                     else:
                         s.add(Role(name=rname, permissions_json=json.dumps([]))); s.commit()
                         toast_ok("Papel criado.")
-                        st.experimental_rerun()
+                        st.rerun()
         with colR:
             st.markdown("#### Editar permissões do papel")
             role_sel = st.selectbox("Papel", roles, format_func=lambda r: r.name if r else "-")
