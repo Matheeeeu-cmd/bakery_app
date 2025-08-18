@@ -16,8 +16,8 @@ from db import (
     Recipe, RecipeItem, Product, Client, Order, OrderItem,
     ManualPurchase, ManualPurchaseItem,
     get_or_create_default_config, get_user_permissions, ALL_PERMISSIONS,
-    estimate_product_unit_cost, consume_fifo_for_order, ingredient_shortages, DEFAULT_KANBAN_STAGES
-create_login_token, get_user_by_token, delete_token
+    estimate_product_unit_cost, consume_fifo_for_order, ingredient_shortages, DEFAULT_KANBAN_STAGES,
+    create_login_token, get_user_by_token, delete_token,
 )
 
 # -----------------------
