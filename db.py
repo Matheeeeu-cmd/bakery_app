@@ -435,22 +435,36 @@ def column_exists(engine, table: str, column: str) -> bool:
         return False
     return column in cols
 
+def column_exists(engine, table_name: str, column_name: str) -> bool:
+    insp = inspect(engine)
+    try:
+        cols = insp.get_columns(table_name)
+    except Exception:
+        return False
+    return any(c.get("name") == column_name for c in cols)
+
 def run_safe_migrations(engine):
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+
     with engine.begin() as conn:
-        insp = inspect(engine)
-        tables = insp.get_table_names()
-        # exemplo: renomear active -> is_active em algumas tabelas comuns
-        for tbl in ["user","ingredient","recipe","product","client"]:
-            if tbl in tables and column_exists(engine, tbl, "active") and not column_exists(engine, tbl, "is_active"):
-                # tentativa de rename cross-db
+        # ------- Campos extras para ManualPurchase (usados por "Sugestões de compra") -------
+        if "manual_purchase" in tables:
+            if not column_exists(engine, "manual_purchase", "is_suggestion"):
                 try:
-                    conn.execute(text(f'ALTER TABLE "{tbl}" RENAME COLUMN active TO is_active'))
+                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN is_suggestion BOOLEAN DEFAULT 0'))
                 except Exception:
-                    # fallback: criar is_active se rename falhar
-                    try:
-                        conn.execute(text(f'ALTER TABLE "{tbl}" ADD COLUMN is_active BOOLEAN DEFAULT 1'))
-                    except Exception:
-                        pass
+                    pass
+            if not column_exists(engine, "manual_purchase", "title"):
+                try:
+                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN title VARCHAR(200)'))
+                except Exception:
+                    pass
+            if not column_exists(engine, "manual_purchase", "completed_at"):
+                try:
+                    conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN completed_at TIMESTAMP'))
+                except Exception:
+                    pass
         # garantir coluna kanban_stages_json e fifo_stage
         if "config" in tables:
             if not column_exists(engine, "config", "kanban_stages_json"):
@@ -654,13 +668,17 @@ def estimate_product_unit_cost(session: Session, product: Product) -> float:
 # -----------------------
 # Inicialização DB (create_all + migrations + seeds)
 # -----------------------
-def init_db(engine=None):
-    engine = engine or make_engine()
+def init_db(engine):
+    # cria tabelas que não existem
     Base.metadata.create_all(engine)
+
+    # roda migrações idempotentes (add coluna se faltar, etc.)
     run_safe_migrations(engine)
-    # Seed roles e config
-    SessionLocal = make_sessionmaker(engine)
+
+    # seed básico (roles e config)
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
     with SessionLocal() as session:
         seed_default_roles(session)
         get_or_create_default_config(session)
+        session.commit()
     return engine
