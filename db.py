@@ -14,6 +14,12 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
 
+# base do ORM
+Base = declarative_base()
+
+# defaults do Kanban (caso ainda não estejam definidos abaixo)
+DEFAULT_KANBAN_STAGES = ["NOVO","PRA_PRODUCAO","EM_PRODUCAO","EMBALAGEM","PRONTO_RETIRADA","ENTREGUE","CANCELADO"]
+
 # -----------------------
 # Base / Engine helpers
 # -----------------------
@@ -136,55 +142,79 @@ class Supplier(Base):
     name = Column(String(120), unique=True, nullable=False)
     contact = Column(String(200))
     created_at = Column(DateTime, default=dt.datetime.utcnow)
+# ---------- MODELOS CORRIGIDOS (Ingredient → ManualPurchase) ----------
+
 class Ingredient(Base):
     __tablename__ = "ingredient"
     id = Column(Integer, primary_key=True)
-    name = Column(String(120), unique=True, nullable=False, index=True)
-    unit = Column(String(20), default="g")  # 'g' ou 'un'
+    name = Column(String(120), unique=True, nullable=False)
+    unit = Column(String(10), default="g")
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
-    prices = relationship("IngredientPrice", back_populates="ingredient", cascade="all, delete")
-    lots = relationship("StockLot", back_populates="ingredient", cascade="all, delete")
+
+    # pares consistentes
+    prices = relationship("IngredientPrice", back_populates="ingredient", cascade="all, delete-orphan")
+    stock_lots = relationship("StockLot", back_populates="ingredient", cascade="all, delete-orphan")
+
 
 class IngredientPrice(Base):
     __tablename__ = "ingredient_price"
     id = Column(Integer, primary_key=True)
     ingredient_id = Column(Integer, ForeignKey("ingredient.id", ondelete="CASCADE"), nullable=False)
-    supplier_id = Column(Integer, ForeignKey("supplier.id", ondelete="SET NULL"))
     price = Column(Float, nullable=False)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
-    ingredient = relationship("Ingredient", back_populates="prices")
-    supplier = relationship("Supplier")
 
+    ingredient = relationship("Ingredient", back_populates="prices")
+
+
+class StockLot(Base):
+    __tablename__ = "stock_lot"
+    id = Column(Integer, primary_key=True)
+    ingredient_id = Column(Integer, ForeignKey("ingredient.id", ondelete="CASCADE"), nullable=False)
+    qty_total = Column(Float, nullable=False)        # quantidade comprada
+    qty_remaining = Column(Float, nullable=False)    # quanto ainda resta
+    unit = Column(String(20), default="g")
+    buy_price = Column(Float, nullable=False)        # preço por unidade
+    best_before = Column(Date)                       # validade (opcional)
+    note = Column(String(200))
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    ingredient = relationship("Ingredient", back_populates="stock_lots")
+    moves = relationship("StockMove", back_populates="lot", cascade="all, delete-orphan")
+
+# === ADICIONE ESTA CLASSE ANTES DE RecipeItem ===
 class Recipe(Base):
     __tablename__ = "recipe"
     id = Column(Integer, primary_key=True)
     name = Column(String(120), unique=True, nullable=False)
-    yield_qty = Column(Float, default=1.0)  # rendimento total da receita base
-    unit = Column(String(20), default="un") # unidade do rendimento
+    yield_qty = Column(Float, default=1.0)   # rendimento total da receita
+    unit = Column(String(20), default="un")  # unidade do rendimento (ex.: un, g)
     is_active = Column(Boolean, default=True)
-    # 👇 DIZER QUAL FK FAZ O VÍNCULO: RecipeItem.recipe_id
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    # Relacionamento correto com RecipeItem usando a FK recipe_id
     items = relationship(
         "RecipeItem",
         back_populates="recipe",
-        cascade="all, delete",
         foreign_keys="RecipeItem.recipe_id",
+        cascade="all, delete-orphan",
     )
 
 class RecipeItem(Base):
     __tablename__ = "recipe_item"
     id = Column(Integer, primary_key=True)
     recipe_id = Column(Integer, ForeignKey("recipe.id", ondelete="CASCADE"), nullable=False)
-    # Um item pode ser um ingrediente OU uma sub-receita
+    # item pode ser ingrediente OU sub-receita
     ingredient_id = Column(Integer, ForeignKey("ingredient.id", ondelete="SET NULL"))
     sub_recipe_id = Column(Integer, ForeignKey("recipe.id", ondelete="SET NULL"))
     qty = Column(Float, nullable=False)
     item_type = Column(String(20), default="peso")  # "peso" ou "unidade"
 
-    # 👇 De novo, fixamos a FK correta do lado filho
+    # vincula explicitamente a FK correta para evitar ambiguidade
     recipe = relationship("Recipe", back_populates="items", foreign_keys=[recipe_id])
     ingredient = relationship("Ingredient", foreign_keys=[ingredient_id])
     sub_recipe = relationship("Recipe", foreign_keys=[sub_recipe_id])
+
 
 class Product(Base):
     __tablename__ = "product"
@@ -194,7 +224,12 @@ class Product(Base):
     is_active = Column(Boolean, default=True)
     price_manual = Column(Float)  # se preenchido, usar manual
     created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    # opcionalmente parear com Recipe (se sua classe Recipe tiver products)
     recipe = relationship("Recipe")
+    # parear com OrderItem para evitar avisos futuros
+    order_items = relationship("OrderItem", back_populates="product")
+
 
 class Client(Base):
     __tablename__ = "client"
@@ -205,6 +240,9 @@ class Client(Base):
     notes = Column(Text)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    orders = relationship("Order", back_populates="client")
+
 
 class Order(Base):
     __tablename__ = "order"
@@ -218,9 +256,11 @@ class Order(Base):
     pos_stage = Column(String(32), default="ENTREGUE")  # pipeline pós-venda
     canceled_reason = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
-    client = relationship("Client")
-    items = relationship("OrderItem", back_populates="order", cascade="all, delete")
+
+    client = relationship("Client", back_populates="orders")
+    items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     moves = relationship("StockMove", back_populates="order")
+
 
 class OrderItem(Base):
     __tablename__ = "order_item"
@@ -231,22 +271,10 @@ class OrderItem(Base):
     unit_price = Column(Float, nullable=False)
     unit_cost_snapshot = Column(Float, default=0.0)  # custo unitário estimado no momento do pedido
     created_at = Column(DateTime, default=dt.datetime.utcnow)
-    order = relationship("Order", back_populates="items")
-    product = relationship("Product")
 
-class StockLot(Base):
-    __tablename__ = "stock_lot"
-    id = Column(Integer, primary_key=True)
-    ingredient_id = Column(Integer, ForeignKey("ingredient.id", ondelete="CASCADE"), nullable=False)
-    qty_total = Column(Float, nullable=False)
-    qty_remaining = Column(Float, nullable=False)
-    unit = Column(String(20), default="g")
-    buy_price = Column(Float, nullable=False)  # preço por unidade
-    best_before = Column(Date)
-    note = Column(String(200))
-    created_at = Column(DateTime, default=dt.datetime.utcnow)
-    ingredient = relationship("Ingredient", back_populates="lots")
-    moves = relationship("StockMove", back_populates="lot", cascade="all, delete")
+    order = relationship("Order", back_populates="items")
+    product = relationship("Product", back_populates="order_items")
+
 
 class StockMove(Base):
     __tablename__ = "stock_move"
@@ -256,12 +284,15 @@ class StockMove(Base):
     move_type = Column(String(12), default="OUT")  # IN, OUT, ADJUST, LOSS
     qty = Column(Float, nullable=False)
     unit = Column(String(20), default="g")
-    cost = Column(Float, default=0.0)  # custo estimado (qty * unit_cost) pra OUT/LOSS
+    cost = Column(Float, default=0.0)              # custo estimado (p/ OUT/LOSS)
     order_id = Column(Integer, ForeignKey("order.id", ondelete="SET NULL"))
     notes = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
+
     lot = relationship("StockLot", back_populates="moves")
     order = relationship("Order", back_populates="moves")
+    ingredient = relationship("Ingredient")  # sem back_populates (consulta solta)
+
 
 class LossEvent(Base):
     __tablename__ = "loss_event"
@@ -272,22 +303,25 @@ class LossEvent(Base):
     reason = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
+    ingredient = relationship("Ingredient")
+    lot = relationship("StockLot")
+
+
 class ManualPurchase(Base):
     __tablename__ = "manual_purchase"
     id = Column(Integer, primary_key=True)
     supplier_id = Column(Integer, ForeignKey("supplier.id", ondelete="SET NULL"))
     total = Column(Float, default=0.0)
 
-    # >>> novos campos usados no app <<<
-    is_suggestion = Column(Boolean, default=False, nullable=False)  # lista gerada por “Sugestões de compra”
-    title = Column(String(200))                                     # título descritivo da sugestão/lista
-    completed_at = Column(DateTime)                                 # quando a lista/sugestão foi concluída
-    # <<<
+    # campos usados pelas “Sugestões de compra”
+    is_suggestion = Column(Boolean, default=False, nullable=False)
+    title = Column(String(200))
+    completed_at = Column(DateTime)
 
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
-    # (opcional) relacionamento para facilitar consultas
     supplier = relationship("Supplier", backref="manual_purchases")
+
 
 class ManualPurchaseItem(Base):
     __tablename__ = "manual_purchase_item"
