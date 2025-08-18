@@ -142,6 +142,8 @@ class Supplier(Base):
     name = Column(String(120), unique=True, nullable=False)
     contact = Column(String(200))
     created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    manual_purchases = relationship("ManualPurchase", back_populates="supplier")
 # ---------- MODELOS CORRIGIDOS (Ingredient → ManualPurchase) ----------
 
 class Ingredient(Base):
@@ -313,14 +315,16 @@ class ManualPurchase(Base):
     supplier_id = Column(Integer, ForeignKey("supplier.id", ondelete="SET NULL"))
     total = Column(Float, default=0.0)
 
-    # campos usados pelas “Sugestões de compra”
+    # usados na página "Sugestões de compra"
     is_suggestion = Column(Boolean, default=False, nullable=False)
     title = Column(String(200))
     completed_at = Column(DateTime)
 
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
-    supplier = relationship("Supplier", backref="manual_purchases")
+    # pares de relacionamento
+    supplier = relationship("Supplier", back_populates="manual_purchases")
+    items = relationship("ManualPurchaseItem", back_populates="purchase", cascade="all, delete-orphan")
 
 
 class ManualPurchaseItem(Base):
@@ -328,11 +332,12 @@ class ManualPurchaseItem(Base):
     id = Column(Integer, primary_key=True)
     purchase_id = Column(Integer, ForeignKey("manual_purchase.id", ondelete="CASCADE"), nullable=False)
     ingredient_id = Column(Integer, ForeignKey("ingredient.id", ondelete="SET NULL"))
-    qty = Column(Float, nullable=False)
-    unit = Column(String(20), default="g")
-    price = Column(Float, nullable=False)  # preço por unidade
-    created_at = Column(DateTime, default=dt.datetime.utcnow)
+    qty = Column(Float, default=0.0)
+    unit = Column(String(10), default="g")
+    price = Column(Float, default=0.0)
+
     purchase = relationship("ManualPurchase", back_populates="items")
+    ingredient = relationship("Ingredient")
 
 # -----------------------
 # Funções RBAC
