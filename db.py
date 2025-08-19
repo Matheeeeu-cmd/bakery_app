@@ -26,18 +26,23 @@ DEFAULT_KANBAN_STAGES = [
 # Engine helpers
 # ---------------------------------------------------------------------
 def make_engine(database_url: Optional[str] = None):
-    url = database_url or os.getenv("DATABASE_URL")
-    if not url:
-        url = "sqlite:///bakery.db"
-    engine = create_engine(url, echo=False, future=True)
+    url = database_url or os.getenv("DATABASE_URL") or "sqlite:///bakery.db"
+    kw = dict(echo=False, future=True, pool_pre_ping=True)
+    # Força SSL no Postgres (Neon) se não houver parâmetro
+    if url.startswith("postgres") and "sslmode=" not in url:
+        if "?" in url:
+            url = url + "&sslmode=require"
+        else:
+            url = url + "?sslmode=require"
+    engine = create_engine(url, **kw)
     if url.startswith("sqlite"):
-        from sqlalchemy import event
         @event.listens_for(engine, "connect")
         def _set_sqlite_pragma(dbapi_connection, connection_record):
-            cur = dbapi_connection.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
     return engine
+
 
 def make_sessionmaker(engine):
     return sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
