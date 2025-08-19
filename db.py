@@ -243,12 +243,16 @@ class Order(Base):
     total = Column(Float, default=0.0)
     obs = Column(Text)
     pos_stage = Column(String(32), default="ENTREGUE")
+    # >>> ADICIONE ESTAS 2 LINHAS <<<
+    pos1_date = Column(Date)
+    pos2_date = Column(Date)
+    # <<<
     canceled_reason = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
-
-    client = relationship("Client", back_populates="orders")
-    items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+    client = relationship("Client")
+    items = relationship("OrderItem", back_populates="order", cascade="all, delete")
     moves = relationship("StockMove", back_populates="order")
+
 
 class OrderItem(Base):
     __tablename__ = "order_item"
