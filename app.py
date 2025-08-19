@@ -514,32 +514,39 @@ def page_products():
                         toast_ok("Produto criado.")
                         st.rerun()
 
-        st.markdown("### Lista / Preço sugerido")
-        cfg = get_or_create_default_config(s)
-        data = []
-        for p in s.query(Product).order_by(Product.is_active.desc(), Product.name.asc()).all():
-            cost = estimate_product_unit_cost(s, p)
-            suggested = cost * (1.0 + (cfg.margin_default or 0.60))
-            price_show = p.price_manual if p.price_manual else suggested
-            data.append([p.id, p.name, p.recipe.name if p.recipe else "-", fmt_money(cost), fmt_money(suggested), fmt_money(price_show), p.is_active])
-        df = pd.DataFrame(data, columns=["ID", "Nome", "Receita", "Custo unitário", "Sugestão", "Preço exibido", "Ativo"])
-        st.dataframe(df, hide_index=True, use_container_width=True)
-
         st.markdown("### Editar produto")
         allp = s.query(Product).order_by(Product.name.asc()).all()
         psel = st.selectbox("Selecione", allp, format_func=lambda p: p.name if p else "-")
         if psel:
-            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
+            c1, c2, c3, c4 = st.columns([3,2,1,1])
             new_name = c1.text_input("Nome", value=psel.name, key=f"pname_{psel.id}")
+
+            # ↓↓↓ CORREÇÃO AQUI (índice seguro por ID)
             recs = s.query(Recipe).order_by(Recipe.name.asc()).all()
-            new_rec = c2.selectbox("Receita", [None] + recs, index=(0 if not psel.recipe else 1 + recs.index(psel.recipe)), format_func=lambda r: (r.name if r else "-"), key=f"prec_{psel.id}")
+            rec_choices = [None] + recs
+            if psel.recipe_id:
+                try:
+                    idx = 1 + next(i for i, r in enumerate(recs) if r.id == psel.recipe_id)
+                except StopIteration:
+                    idx = 0
+            else:
+                idx = 0
+            new_rec = c2.selectbox(
+                "Receita",
+                rec_choices,
+                index=idx,
+                format_func=lambda r: (r.name if r else "-"),
+                key=f"prec_{psel.id}",
+            )
+            # ↑↑↑ FIM DA CORREÇÃO
+
             new_price_manual = c3.number_input("Preço manual", min_value=0.0, value=float(psel.price_manual or 0.0), step=0.01, key=f"pprice_{psel.id}")
             new_active = c4.checkbox("Ativo", value=bool(psel.is_active), key=f"pactive_{psel.id}")
             if st.button("Salvar produto", key=f"psave_{psel.id}"):
                 if not can("product.update"):
                     toast_err("Sem permissão.")
                 else:
-                    psel.name = new_name.strip() or psel.name
+                    psel.name = (new_name or "").strip() or psel.name
                     psel.recipe_id = new_rec.id if new_rec else None
                     psel.price_manual = new_price_manual if new_price_manual > 0 else None
                     psel.is_active = new_active
@@ -547,6 +554,7 @@ def page_products():
                     cached_products.clear()
                     toast_ok("Produto atualizado.")
                     st.rerun()
+
 
 def page_clients():
     st.subheader("Clientes")
