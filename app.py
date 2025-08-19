@@ -847,7 +847,7 @@ def page_stock():
                     st.rerun()
 
         # ---------------- Compra manual ----------------
-       st.markdown("### Compra manual")
+        st.markdown("### Compra manual")
         ing_opts = cached_ingredients()
         if not ing_opts:
             st.info("Cadastre ingredientes primeiro.")
