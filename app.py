@@ -1188,7 +1188,7 @@ def page_users():
                         st.rerun()
         with colR:
             st.markdown("#### Editar permissões do papel")
-            role_sel = st.selectbox("Papel", roles, format_func=lambda r: r.name if r else "-")
+            role_sel = st.selectbox("Papel", roles, format_func=lambda r: r.name if r else "-", key="role_edit_select")
             if role_sel:
                 try:
                     curr = set(json.loads(role_sel.permissions_json or "[]"))
@@ -1229,7 +1229,7 @@ def page_users():
             st.write("Papéis atuais:", ", ".join([r.name for r in u_sel.roles]) or "—")
 
             r_opts = [(r.id, r.name) for r in s.query(Role).order_by(Role.name.asc()).all()]
-            r_tuple = st.selectbox("Papel", r_opts, format_func=lambda t: t[1] if t else "-")
+           r_tuple = st.selectbox("Papel", r_opts, format_func=lambda t: t[1] if t else "-", key="role_assign_select")
 
             cols = st.columns(2)
             if cols[0].button("Atribuir"):
