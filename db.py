@@ -402,6 +402,15 @@ def get_or_create_default_config(session: Session) -> Config:
 # ---------------------------------------------------------------------
 # Migrações idempotentes
 # ---------------------------------------------------------------------
+from sqlalchemy import text
+
+def table_exists(engine, table_name: str) -> bool:
+    insp = inspect(engine)
+    try:
+        return table_name in insp.get_table_names()
+    except Exception:
+        return False
+
 def column_exists(engine, table_name: str, column_name: str) -> bool:
     insp = inspect(engine)
     try:
@@ -411,24 +420,63 @@ def column_exists(engine, table_name: str, column_name: str) -> bool:
     return any(c.get("name") == column_name for c in cols)
 
 def run_safe_migrations(engine):
-    """
-    Executa ALTER TABLE ... IF NOT EXISTS para criar colunas faltantes.
-    Pode rodar várias vezes sem erro.
-    """
+    """Migrações idempotentes para Postgres/SQLite."""
     with engine.begin() as conn:
-        insp = inspect(engine)
-        tables = set(insp.get_table_names())
+        # ---------- CONFIG ----------
+        if table_exists(engine, "config"):
+            if not column_exists(engine, "config", "kanban_stages_json"):
+                conn.execute(text('ALTER TABLE "config" ADD COLUMN kanban_stages_json TEXT'))
+            if not column_exists(engine, "config", "fifo_stage"):
+                conn.execute(text('ALTER TABLE "config" ADD COLUMN fifo_stage VARCHAR(64)'))
 
-        # ManualPurchase -> colunas usadas por "Sugestões de compra"
-        if "manual_purchase" in tables:
-            conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS is_suggestion BOOLEAN DEFAULT FALSE'))
-            conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS title VARCHAR(200)'))
-            conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP'))
+        # ---------- MANUAL_PURCHASE ----------
+        if table_exists(engine, "manual_purchase"):
+            if not column_exists(engine, "manual_purchase", "is_suggestion"):
+                # BOOLEAN DEFAULT FALSE (não 0) para Postgres
+                conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN is_suggestion BOOLEAN DEFAULT FALSE'))
+            if not column_exists(engine, "manual_purchase", "title"):
+                conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN title VARCHAR(200)'))
+            if not column_exists(engine, "manual_purchase", "completed_at"):
+                conn.execute(text('ALTER TABLE "manual_purchase" ADD COLUMN completed_at TIMESTAMP'))
 
-        # Config -> campos extras
-        if "config" in tables:
-            conn.execute(text('ALTER TABLE "config" ADD COLUMN IF NOT EXISTS kanban_stages_json TEXT'))
-            conn.execute(text('ALTER TABLE "config" ADD COLUMN IF NOT EXISTS fifo_stage VARCHAR(64)'))
+        # ---------- RECIPE / RECIPE_ITEM (garante que existam) ----------
+        if not table_exists(engine, "recipe"):
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS recipe (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(120) UNIQUE NOT NULL,
+                    yield_qty DOUBLE PRECISION DEFAULT 1.0 NOT NULL,
+                    unit VARCHAR(20) DEFAULT 'un',
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP
+                )
+            """))
+        if not table_exists(engine, "recipe_item"):
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS recipe_item (
+                    id SERIAL PRIMARY KEY,
+                    recipe_id INTEGER NOT NULL REFERENCES recipe(id) ON DELETE CASCADE,
+                    ingredient_id INTEGER REFERENCES ingredient(id) ON DELETE SET NULL,
+                    sub_recipe_id INTEGER REFERENCES recipe(id) ON DELETE SET NULL,
+                    qty DOUBLE PRECISION NOT NULL,
+                    item_type VARCHAR(20) DEFAULT 'peso'
+                )
+            """))
+
+        # ---------- PRODUCT.recipe_id ----------
+        if table_exists(engine, "product"):
+            if not column_exists(engine, "product", "recipe_id"):
+                conn.execute(text('ALTER TABLE "product" ADD COLUMN recipe_id INTEGER REFERENCES recipe(id) ON DELETE SET NULL'))
+
+        # ---------- ORDER.pos_stage + POS1/POS2 ----------
+        if table_exists(engine, "order"):
+            if not column_exists(engine, "order", "pos_stage"):
+                conn.execute(text("ALTER TABLE \"order\" ADD COLUMN pos_stage VARCHAR(32) DEFAULT 'ENTREGUE'"))
+            if not column_exists(engine, "order", "pos1_date"):
+                conn.execute(text('ALTER TABLE "order" ADD COLUMN pos1_date DATE'))
+            if not column_exists(engine, "order", "pos2_date"):
+                conn.execute(text('ALTER TABLE "order" ADD COLUMN pos2_date DATE'))
+
 
 # ---------------------------------------------------------------------
 # Helpers de Estoque FIFO e custos
