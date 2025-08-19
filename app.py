@@ -366,27 +366,27 @@ def page_ingredients():
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
         # ---------------- Tab 3: Histórico de Preços (somente consulta) ----------------
+       # ---------------- Tab 3: Histórico de Preços (somente consulta) ----------------
         with tab3:
-            st.markdown("### Histórico de Preços (consulta)")
+            st.markdown("### Histórico de Preços")
             ing_opts = cached_ingredients()
-            if ing_opts:
-                ing_map = {n: i for i, n, _ in ing_opts}
-                sel_name = st.selectbox("Ingrediente", [n for _, n, _ in ing_opts], key="price_hist_ing_only")
-    
-                # Apenas consultar
+            if not ing_opts:
+                st.info("Cadastre ingredientes antes.")
+            else:
+                ing_names = [n for _, n, _ in ing_opts]
+                sel_name = st.selectbox("Ingrediente", ing_names, key="price_hist_ing_view")
+                # consultar preços do ingrediente escolhido
                 q = (
                     s.query(IngredientPrice)
                     .join(Ingredient, IngredientPrice.ingredient_id == Ingredient.id)
                     .filter(Ingredient.name == sel_name)
                     .order_by(IngredientPrice.created_at.desc())
-                    .limit(200)
+                    .limit(400)
                 )
                 prices = q.all()
-                rows = [{"Quando": p.created_at, "Preço por unidade": p.price} for p in prices]
+                rows = [{"Quando": p.created_at, "Preço/un": p.price} for p in prices]
                 st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-            else:
-                st.info("Cadastre ingredientes antes.")
-
+                
 def page_recipes():
     st.subheader("Receitas")
     if not can("page.recipes"):
@@ -846,65 +846,73 @@ def page_stock():
                     toast_ok("Fornecedor atualizado.")
                     st.rerun()
 
-        # ---------------- Compra manual ----------------
         st.markdown("### Compra manual")
         ing_opts = cached_ingredients()
         if not ing_opts:
             st.info("Cadastre ingredientes primeiro.")
         else:
-            with SessionLocal() as s:
-                with st.form("purchase_form"):
-                    sup_list = s.query(Supplier).order_by(Supplier.name.asc()).all()
-                    sup = st.selectbox("Fornecedor", [None] + sup_list, format_func=lambda x: x.name if x else "-")
+            with st.form("purchase_form"):
+                # Fornecedor por dropdown
+                sup_list = s.query(Supplier).order_by(Supplier.name.asc()).all()
+                sup = st.selectbox("Fornecedor", [None] + sup_list, format_func=lambda x: x.name if x else "-")
 
-                    lines = st.number_input("Itens nesta compra", min_value=1, max_value=20, value=1)
-                    entries = []
-                    for i in range(int(lines)):
-                        cols = st.columns((3, 1, 1, 1, 2))
-                        sel = cols[0].selectbox(f"Ingrediente #{i+1}", ing_opts, key=f"p_ing_{i}", format_func=lambda t: t[1])
-                        qty = cols[1].number_input("Qtd", min_value=0.0, step=0.1, key=f"p_qty_{i}")
-                        unit = cols[2].selectbox("Un", ["g", "un"], key=f"p_unit_{i}")
-                        total_price = cols[3].number_input("Preço TOTAL do lote", min_value=0.0, step=0.01, key=f"p_price_{i}")
-                        bb = cols[4].date_input("Validade", key=f"p_bb_{i}")
-                        entries.append((sel, qty, unit, total_price, bb))
+                lines = st.number_input("Itens nesta compra", min_value=1, max_value=20, value=1)
+                entries = []
+                for i in range(int(lines)):
+                    cols = st.columns((3, 1, 1, 2, 2))
+                    sel = cols[0].selectbox(f"Ingrediente #{i+1}", ing_opts, key=f"p_ing_{i}", format_func=lambda t: t[1])
+                    qty = cols[1].number_input("Qtd", min_value=0.0, step=0.1, key=f"p_qty_{i}")
+                    unit = cols[2].selectbox("Un", ["g", "un"], key=f"p_unit_{i}")
+                    total_price = cols[3].number_input("Valor total do item (R$)", min_value=0.0, step=0.01, key=f"p_total_{i}")
+                    bb = cols[4].date_input("Validade (opcional)", key=f"p_bb_{i}")
+                    entries.append((sel, qty, unit, total_price, bb))
 
-                    submit = st.form_submit_button("Registrar compra")
-                    if submit:
-                        if not can("stock.create_purchase"):
-                            toast_err("Sem permissão.")
-                        else:
-                            total = 0.0
-                            p = ManualPurchase(supplier_id=(sup.id if sup else None), total=0.0)
-                            s.add(p); s.flush()
+                ok = st.form_submit_button("Registrar compra")
+                if ok:
+                    if not can("stock.create_purchase"):
+                        toast_err("Sem permissão.")
+                    else:
+                        # validação rápida
+                        if any((q <= 0 for _, q, _, _, _ in entries)):
+                            toast_err("Quantidade deve ser maior que zero.")
+                            st.stop()
 
-                            from db import create_lot
-                            for (sel, qty, unit, total_price, bb) in entries:
-                                ing_id = int(sel[0])
-                                # Calcula preço por unidade a partir do total do lote
-                                unit_price = (total_price / qty) if qty and total_price else 0.0
+                        total_compra = 0.0
+                        p = ManualPurchase(supplier_id=(sup.id if sup else None), total=0.0)
+                        s.add(p); s.flush()
 
-                                # Registra item da compra
-                                s.add(ManualPurchaseItem(
+                        from db import create_lot
+                        # mapa id -> (nome, unidade)
+                        ing_id_to_unit = {int(i): u for i, _, u in ing_opts}
+                        for (sel, qty, unit, total_price, bb) in entries:
+                            ing_id = int(sel[0])
+                            # calcula preço por unidade automaticamente
+                            unit_price = (total_price / qty) if qty > 0 else 0.0
+
+                            # item da lista de compra
+                            s.add(
+                                ManualPurchaseItem(
                                     purchase_id=p.id,
                                     ingredient_id=ing_id,
                                     qty=qty,
                                     unit=unit,
-                                    price=unit_price
-                                ))
+                                    price=unit_price,   # armazenamos o valor unitário aqui
+                                )
+                            )
 
-                                # Cria o lote (usa unit_price) e o movimento IN
-                                create_lot(s, ing_id, qty, unit, unit_price, bb, note=f"Compra #{p.id}")
+                            # cria o lote com custo unitário calculado
+                            create_lot(s, ing_id, qty, unit, unit_price, bb, note=f"Compra #{p.id}")
 
-                                # Grava histórico de preço automaticamente
-                                s.add(IngredientPrice(ingredient_id=ing_id, price=unit_price))
+                            # grava histórico de preço (preço por unidade)
+                            s.add(IngredientPrice(ingredient_id=ing_id, price=unit_price))
 
-                                # Para somar o total desta compra
-                                total += (total_price or 0.0)
+                            total_compra += (total_price or 0.0)
 
-                            p.total = total
-                            s.commit()
-                            toast_ok(f"Compra registrada (total {fmt_money(total)}).")
-                            st.rerun()
+                        p.total = total_compra
+                        s.commit()
+                        toast_ok(f"Compra registrada (total {fmt_money(total_compra)}).")
+                        st.rerun()
+
 
         # ---------------- Ajustes / Vencidos ----------------
         st.markdown("### Ajustes / Vencidos")
@@ -1204,27 +1212,34 @@ def page_users():
                         toast_ok("Permissões salvas.")
 
         st.markdown("### Atribuir/Remover papéis")
-        users = s.query(User).order_by(User.username.asc()).all()
-        u_sel = st.selectbox("Usuário", users, format_func=lambda u: u.username if u else "-")
-        if u_sel:
+
+        # seleção por ID (evita objetos desanexados)
+        user_opts = [(u.id, u.username) for u in s.query(User).order_by(User.username.asc()).all()]
+        u_tuple = st.selectbox("Usuário", user_opts, format_func=lambda t: t[1] if t else "-")
+        if u_tuple:
+            u_sel = s.get(User, u_tuple[0])  # recarrega da sessão ativa, com attach garantido
             st.write("Papéis atuais:", ", ".join([r.name for r in u_sel.roles]) or "—")
-            r_opts = s.query(Role).order_by(Role.name.asc()).all()
-            r_sel = st.selectbox("Papel para atribuir", r_opts, format_func=lambda r: r.name if r else "-")
+
+            r_opts = [(r.id, r.name) for r in s.query(Role).order_by(Role.name.asc()).all()]
+            r_tuple = st.selectbox("Papel", r_opts, format_func=lambda t: t[1] if t else "-")
+
             cols = st.columns(2)
             if cols[0].button("Atribuir"):
                 if not can("rbac.assign_roles"):
                     toast_err("Sem permissão.")
                 else:
-                    if r_sel not in u_sel.roles:
-                        u_sel.roles.append(r_sel); s.commit(); toast_ok("Papel atribuído.")
+                    role = s.get(Role, r_tuple[0])
+                    if role not in u_sel.roles:
+                        u_sel.roles.append(role); s.commit(); toast_ok("Papel atribuído.")
                         if "user" in st.session_state and st.session_state["user"]["id"] == u_sel.id:
                             st.session_state["perms"] = get_user_permissions(s, u_sel)
             if cols[1].button("Remover"):
                 if not can("rbac.assign_roles"):
                     toast_err("Sem permissão.")
                 else:
-                    if r_sel in u_sel.roles:
-                        u_sel.roles.remove(r_sel); s.commit(); toast_ok("Papel removido.")
+                    role = s.get(Role, r_tuple[0])
+                    if role in u_sel.roles:
+                        u_sel.roles.remove(role); s.commit(); toast_ok("Papel removido.")
                         if "user" in st.session_state and st.session_state["user"]["id"] == u_sel.id:
                             st.session_state["perms"] = get_user_permissions(s, u_sel)
 
