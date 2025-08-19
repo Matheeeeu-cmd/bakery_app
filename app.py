@@ -365,27 +365,27 @@ def page_ingredients():
             ]
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-        # ---------------- Tab 3: Histórico de Preços ----------------
         # ---------------- Tab 3: Histórico de Preços (somente consulta) ----------------
         with tab3:
-            st.markdown("### Histórico de Preços")
-            ing_opts = cached_ingredients()
-            if not ing_opts:
-                st.info("Cadastre ingredientes antes.")
-            else:
-                name_map = {n: i for i, n, _ in ing_opts}
-                sel_name = st.selectbox("Ingrediente", [n for _, n, _ in ing_opts], key="price_hist_ing_view")
-                ing_id = name_map[sel_name]
-                q = (
-                    s.query(IngredientPrice)
-                    .filter(IngredientPrice.ingredient_id == ing_id)
-                    .order_by(IngredientPrice.created_at.desc())
-                    .limit(200)
-                )
-                prices = q.all()
-                rows = [{"Quando": p.created_at, "Preço unitário": p.price} for p in prices]
-                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-                st.caption("Os preços acima são salvos automaticamente quando você registra uma compra.")
+    st.markdown("### Histórico de Preços (consulta)")
+    ing_opts = cached_ingredients()
+    if ing_opts:
+        ing_map = {n: i for i, n, _ in ing_opts}
+        sel_name = st.selectbox("Ingrediente", [n for _, n, _ in ing_opts], key="price_hist_ing_only")
+
+        # Apenas consultar
+        q = (
+            s.query(IngredientPrice)
+            .join(Ingredient, IngredientPrice.ingredient_id == Ingredient.id)
+            .filter(Ingredient.name == sel_name)
+            .order_by(IngredientPrice.created_at.desc())
+            .limit(200)
+        )
+        prices = q.all()
+        rows = [{"Quando": p.created_at, "Preço por unidade": p.price} for p in prices]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    else:
+        st.info("Cadastre ingredientes antes.")
 
 def page_recipes():
     st.subheader("Receitas")
@@ -847,63 +847,64 @@ def page_stock():
                     st.rerun()
 
         # ---------------- Compra manual ----------------
-        st.markdown("### Compra manual")
-        ing_opts = cached_ingredients()
-        if not ing_opts:
-            st.info("Cadastre ingredientes primeiro.")
-        else:
-            with st.form("purchase_form"):
-                sup_list = s.query(Supplier).order_by(Supplier.name.asc()).all()
-                sup = st.selectbox("Fornecedor", [None] + sup_list, format_func=lambda x: x.name if x else "-")
+       st.markdown("### Compra manual")
+ing_opts = cached_ingredients()
+if not ing_opts:
+    st.info("Cadastre ingredientes primeiro.")
+else:
+    with SessionLocal() as s:
+        with st.form("purchase_form"):
+            sup_list = s.query(Supplier).order_by(Supplier.name.asc()).all()
+            sup = st.selectbox("Fornecedor", [None] + sup_list, format_func=lambda x: x.name if x else "-")
 
-                lines = st.number_input("Itens nesta compra", min_value=1, max_value=20, value=1)
-                entries = []
-                for i in range(int(lines)):
-                    cols = st.columns((3, 1, 1, 1, 2))
-                    sel = cols[0].selectbox(f"Ingrediente #{i+1}", ing_opts, key=f"p_ing_{i}", format_func=lambda t: t[1])
-                    qty = cols[1].number_input("Qtd", min_value=0.0, step=0.1, key=f"p_qty_{i}")
-                    unit = cols[2].selectbox("Un", ["g", "un"], key=f"p_unit_{i}")
-                    total_price = cols[3].number_input("Valor total do item", min_value=0.0, step=0.01, key=f"p_price_{i}")
-                    bb = cols[4].date_input("Validade", key=f"p_bb_{i}")
-                    entries.append((sel, qty, unit, total_price, bb))
+            lines = st.number_input("Itens nesta compra", min_value=1, max_value=20, value=1)
+            entries = []
+            for i in range(int(lines)):
+                cols = st.columns((3, 1, 1, 1, 2))
+                sel = cols[0].selectbox(f"Ingrediente #{i+1}", ing_opts, key=f"p_ing_{i}", format_func=lambda t: t[1])
+                qty = cols[1].number_input("Qtd", min_value=0.0, step=0.1, key=f"p_qty_{i}")
+                unit = cols[2].selectbox("Un", ["g", "un"], key=f"p_unit_{i}")
+                total_price = cols[3].number_input("Preço TOTAL do lote", min_value=0.0, step=0.01, key=f"p_price_{i}")
+                bb = cols[4].date_input("Validade", key=f"p_bb_{i}")
+                entries.append((sel, qty, unit, total_price, bb))
 
-                submit = st.form_submit_button("Registrar compra")
-                if submit:
-                    if not can("stock.create_purchase"):
-                        toast_err("Sem permissão.")
-                    else:
-                        total_compra = 0.0
-                        p = ManualPurchase(supplier_id=(sup.id if sup else None), total=0.0)
-                        s.add(p); s.flush()
+            submit = st.form_submit_button("Registrar compra")
+            if submit:
+                if not can("stock.create_purchase"):
+                    toast_err("Sem permissão.")
+                else:
+                    total = 0.0
+                    p = ManualPurchase(supplier_id=(sup.id if sup else None), total=0.0)
+                    s.add(p); s.flush()
 
-                        from db import create_lot, IngredientPrice
-                        for (sel, qty, unit, total_price, bb) in entries:
-                            ing_id = int(sel[0])
-                            # salva item da compra (armazenamos o valor total do item no campo price)
-                            s.add(ManualPurchaseItem(
-                                purchase_id=p.id,
-                                ingredient_id=ing_id,
-                                qty=qty,
-                                unit=unit,
-                                price=total_price
-                            ))
+                    from db import create_lot
+                    for (sel, qty, unit, total_price, bb) in entries:
+                        ing_id = int(sel[0])
+                        # Calcula preço por unidade a partir do total do lote
+                        unit_price = (total_price / qty) if qty and total_price else 0.0
 
-                            # calcula preço unitário a partir do valor total
-                            unit_price = (total_price / qty) if (qty or 0) > 0 else 0.0
+                        # Registra item da compra
+                        s.add(ManualPurchaseItem(
+                            purchase_id=p.id,
+                            ingredient_id=ing_id,
+                            qty=qty,
+                            unit=unit,
+                            price=unit_price
+                        ))
 
-                            # cria lote com preço unitário calculado
-                            create_lot(s, ing_id, qty, unit, unit_price, bb, note=f"Compra #{p.id}")
+                        # Cria o lote (usa unit_price) e o movimento IN
+                        create_lot(s, ing_id, qty, unit, unit_price, bb, note=f"Compra #{p.id}")
 
-                            # grava histórico de preço unitário
-                            s.add(IngredientPrice(ingredient_id=ing_id, price=unit_price))
+                        # Grava histórico de preço automaticamente
+                        s.add(IngredientPrice(ingredient_id=ing_id, price=unit_price))
 
-                            total_compra += (total_price or 0.0)
+                        # Para somar o total desta compra
+                        total += (total_price or 0.0)
 
-                        p.total = total_compra
-                        s.commit()
-                        toast_ok(f"Compra registrada (total {fmt_money(total_compra)}).")
-                        st.rerun()
-
+                    p.total = total
+                    s.commit()
+                    toast_ok(f"Compra registrada (total {fmt_money(total)}).")
+                    st.rerun()
 
         # ---------------- Ajustes / Vencidos ----------------
         st.markdown("### Ajustes / Vencidos")
