@@ -366,26 +366,26 @@ def page_ingredients():
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
         # ---------------- Tab 3: Histórico de Preços (somente consulta) ----------------
-        with tab3:
-    st.markdown("### Histórico de Preços (consulta)")
-    ing_opts = cached_ingredients()
-    if ing_opts:
-        ing_map = {n: i for i, n, _ in ing_opts}
-        sel_name = st.selectbox("Ingrediente", [n for _, n, _ in ing_opts], key="price_hist_ing_only")
+            with tab3:
+        st.markdown("### Histórico de Preços (consulta)")
+        ing_opts = cached_ingredients()
+        if ing_opts:
+            ing_map = {n: i for i, n, _ in ing_opts}
+            sel_name = st.selectbox("Ingrediente", [n for _, n, _ in ing_opts], key="price_hist_ing_only")
 
-        # Apenas consultar
-        q = (
-            s.query(IngredientPrice)
-            .join(Ingredient, IngredientPrice.ingredient_id == Ingredient.id)
-            .filter(Ingredient.name == sel_name)
-            .order_by(IngredientPrice.created_at.desc())
-            .limit(200)
-        )
-        prices = q.all()
-        rows = [{"Quando": p.created_at, "Preço por unidade": p.price} for p in prices]
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-    else:
-        st.info("Cadastre ingredientes antes.")
+            # Apenas consultar
+            q = (
+                s.query(IngredientPrice)
+                .join(Ingredient, IngredientPrice.ingredient_id == Ingredient.id)
+                .filter(Ingredient.name == sel_name)
+                .order_by(IngredientPrice.created_at.desc())
+                .limit(200)
+            )
+            prices = q.all()
+            rows = [{"Quando": p.created_at, "Preço por unidade": p.price} for p in prices]
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        else:
+            st.info("Cadastre ingredientes antes.")
 
 def page_recipes():
     st.subheader("Receitas")
