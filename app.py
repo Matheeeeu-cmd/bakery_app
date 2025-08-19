@@ -33,6 +33,14 @@ def get_engine_and_sessionmaker():
 
 engine, SessionLocal = get_engine_and_sessionmaker()
 
+# Debug rápido da conexão com o banco
+try:
+    from sqlalchemy import text as _dbg_text
+    with engine.connect() as conn:
+        conn.execute(_dbg_text("SELECT 1"))
+    st.sidebar.success("DB OK (conectado)")
+except Exception as e:
+    st.sidebar.error(f"DB erro de conexão: {e}")
 # -----------------------
 # Auto-login via token na URL
 # -----------------------
