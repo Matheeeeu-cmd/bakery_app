@@ -1141,35 +1141,36 @@ def page_users():
     if not can("page.users"):
         st.info("Sem permissão.")
         return
+
     with SessionLocal() as s:
+        # --- Criar usuário ---
         st.markdown("### Criar usuário")
         with st.form("user_new"):
             username = st.text_input("Usuário")
             name = st.text_input("Nome")
             email = st.text_input("Email")
             pwd = st.text_input("Senha", type="password")
-            roles_all = s.query(Role).order_by(Role.name.asc()).all()
-            roles_pick = st.multiselect("Papéis", roles_all, format_func=lambda r: r.name)
             ok = st.form_submit_button("Criar")
             if ok:
                 if not can("rbac.manage_users"):
                     toast_err("Sem permissão.")
                 elif not username or not pwd:
                     toast_err("Preencha usuário e senha.")
-                elif s.query(User).filter(User.username==username).first():
+                elif s.query(User).filter(User.username == username).first():
                     toast_err("Usuário já existe.")
                 else:
                     phash = bcrypt.hashpw(pwd.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
                     u = User(username=username, name=name, email=email, password_hash=phash, is_active=True)
-                    for r in roles_pick:
-                        u.roles.append(r)
-                    s.add(u); s.commit()
-                    toast_ok("Usuário criado com papéis.")
+                    s.add(u)
+                    s.commit()
+                    toast_ok("Usuário criado.")
                     st.rerun()
 
+        # --- Papéis e permissões ---
         st.markdown("### Papéis e permissões")
         roles = s.query(Role).order_by(Role.name.asc()).all()
         colL, colR = st.columns(2)
+
         with colL:
             st.markdown("#### Criar papel")
             with st.form("role_new"):
@@ -1183,35 +1184,47 @@ def page_users():
                     elif s.query(Role).filter(Role.name == rname).first():
                         toast_err("Já existe.")
                     else:
-                        s.add(Role(name=rname, permissions_json=json.dumps([]))); s.commit()
+                        s.add(Role(name=rname, permissions_json=json.dumps([])))
+                        s.commit()
                         toast_ok("Papel criado.")
                         st.rerun()
+
         with colR:
             st.markdown("#### Editar permissões do papel")
-            role_sel = st.selectbox("Papel", roles, format_func=lambda r: r.name if r else "-", key="role_edit_select")
+            role_sel = st.selectbox(
+                "Papel",
+                roles,
+                format_func=lambda r: r.name if r else "-",
+                key="role_edit_select",
+            )
             if role_sel:
                 try:
                     curr = set(json.loads(role_sel.permissions_json or "[]"))
                 except Exception:
                     curr = set()
+
+                # agrupar permissões por prefixo
                 groups: Dict[str, List[str]] = {}
                 for p in sorted(ALL_PERMISSIONS):
-                    g = p.split(".")[0]
-                    groups.setdefault(g, []).append(p)
-                changed = False
+                    groups.setdefault(p.split(".")[0], []).append(p)
+
                 for g, items in groups.items():
                     st.markdown(f"**{g.upper()}**")
                     cols = st.columns(3)
                     for i, perm in enumerate(items):
                         checked = perm in curr
-                        newv = cols[i % 3].checkbox(perm, value=checked, key=f"chk_{role_sel.id}_{perm}")
+                        newv = cols[i % 3].checkbox(
+                            perm,
+                            value=checked,
+                            key=f"chk_{role_sel.id}_{perm}",
+                        )
                         if newv != checked:
-                            changed = True
                             if newv:
                                 curr.add(perm)
                             else:
                                 curr.discard(perm)
-                if st.button("Salvar permissões"):
+
+                if st.button("Salvar permissões", key="save_role_perms"):
                     if not can("rbac.manage_roles"):
                         toast_err("Sem permissão.")
                     else:
@@ -1219,37 +1232,46 @@ def page_users():
                         s.commit()
                         toast_ok("Permissões salvas.")
 
+        # --- Atribuir/Remover papéis ---
         st.markdown("### Atribuir/Remover papéis")
-
-        # seleção por ID (evita objetos desanexados)
-        user_opts = [(u.id, u.username) for u in s.query(User).order_by(User.username.asc()).all()]
-        u_tuple = st.selectbox("Usuário", user_opts, format_func=lambda t: t[1] if t else "-")
-        if u_tuple:
-            u_sel = s.get(User, u_tuple[0])  # recarrega da sessão ativa, com attach garantido
+        users = s.query(User).order_by(User.username.asc()).all()
+        u_sel = st.selectbox(
+            "Usuário",
+            users,
+            format_func=lambda u: u.username if u else "-",
+            key="user_assign_select",
+        )
+        if u_sel:
             st.write("Papéis atuais:", ", ".join([r.name for r in u_sel.roles]) or "—")
-
-            r_opts = [(r.id, r.name) for r in s.query(Role).order_by(Role.name.asc()).all()]
-           r_tuple = st.selectbox("Papel", r_opts, format_func=lambda t: t[1] if t else "-", key="role_assign_select")
-
+            r_opts = s.query(Role).order_by(Role.name.asc()).all()
+            r_sel = st.selectbox(
+                "Papel para atribuir/remover",
+                r_opts,
+                format_func=lambda r: r.name if r else "-",
+                key="role_assign_select",
+            )
             cols = st.columns(2)
-            if cols[0].button("Atribuir"):
+            if cols[0].button("Atribuir", key="assign_btn"):
                 if not can("rbac.assign_roles"):
                     toast_err("Sem permissão.")
-                else:
-                    role = s.get(Role, r_tuple[0])
-                    if role not in u_sel.roles:
-                        u_sel.roles.append(role); s.commit(); toast_ok("Papel atribuído.")
-                        if "user" in st.session_state and st.session_state["user"]["id"] == u_sel.id:
-                            st.session_state["perms"] = get_user_permissions(s, u_sel)
-            if cols[1].button("Remover"):
+                elif r_sel not in u_sel.roles:
+                    u_sel.roles.append(r_sel)
+                    s.commit()
+                    toast_ok("Papel atribuído.")
+                    # se alterou o usuário logado, recarrega permissões
+                    if "user" in st.session_state and st.session_state["user"]["id"] == u_sel.id:
+                        st.session_state["perms"] = get_user_permissions(s, u_sel)
+
+            if cols[1].button("Remover", key="remove_btn"):
                 if not can("rbac.assign_roles"):
                     toast_err("Sem permissão.")
-                else:
-                    role = s.get(Role, r_tuple[0])
-                    if role in u_sel.roles:
-                        u_sel.roles.remove(role); s.commit(); toast_ok("Papel removido.")
-                        if "user" in st.session_state and st.session_state["user"]["id"] == u_sel.id:
-                            st.session_state["perms"] = get_user_permissions(s, u_sel)
+                elif r_sel in u_sel.roles:
+                    u_sel.roles.remove(r_sel)
+                    s.commit()
+                    toast_ok("Papel removido.")
+                    if "user" in st.session_state and st.session_state["user"]["id"] == u_sel.id:
+                        st.session_state["perms"] = get_user_permissions(s, u_sel)
+
 
 # -----------------------
 # Router
